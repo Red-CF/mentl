@@ -300,7 +300,8 @@ impl Buffer {
     fn snap(&mut self, stroke: &'static str) {
         if undo::mark(&mut self.last_stroke, stroke) {
             self.undo.undo.push((self.rope.clone(), self.cursor));
-            if self.undo.undo.len() > undo::MAX_HISTORY {
+            let cap = undo::history_cap(self.rope.len_bytes());
+            while self.undo.undo.len() > cap {
                 self.undo.undo.remove(0);
             }
             self.undo.redo.clear();
@@ -611,6 +612,15 @@ mod tests {
         assert_eq!(b.line_text(0), "ab");
         b.undo();
         assert_eq!(b.line_text(0), "hola", "2 undos: delete + sesión insert");
+    }
+
+    #[test]
+    fn cap_de_historia_ajusta_por_tamano() {
+        assert_eq!(undo::history_cap(999_999), 100);
+        assert_eq!(undo::history_cap(1_000_001), 20);
+        let mut b = buf("");
+        // buffer chico: cap 100 — el límite activo es el de snaps reales
+        assert_eq!(undo::history_cap(b.rope.len_bytes()), 100);
     }
 
     #[test]

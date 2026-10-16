@@ -9,6 +9,17 @@ pub type Snap = (Rope, (usize, usize));
 
 pub const STROKE_GAP: Duration = Duration::from_secs(1);
 pub const MAX_HISTORY: usize = 100;
+/// Buffers gordos: 100 snaps de rope completa = decenas de MB. Cap proporcional.
+pub const BIG_BUFFER_BYTES: usize = 1_000_000;
+pub const MAX_HISTORY_BIG: usize = 20;
+
+pub fn history_cap(rope_bytes: usize) -> usize {
+    if rope_bytes > BIG_BUFFER_BYTES {
+        MAX_HISTORY_BIG
+    } else {
+        MAX_HISTORY
+    }
+}
 
 #[derive(Default)]
 pub struct Undo {
