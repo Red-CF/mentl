@@ -14,12 +14,26 @@ use ropey::Rope;
 
 use crate::undo::{self, Undo};
 
+/// Tipo de selección visual: por char o por línea.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelKind {
+    Char,
+    Line,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndentKind {
+    Tabs,
+    Spaces(usize),
+}
+
 pub struct Buffer {
     pub path: Option<PathBuf>,
     pub rope: Rope,
     /// (línea 0-based, grapheme 0-based en la línea, sin contar newline)
     pub cursor: (usize, usize),
     pub modified: bool,
+    pub indent: IndentKind,
     pub untitled: bool,
     /// buffer de transcript AI: fuera de LSP/sync/todo lo persistente
     pub ai: bool,
@@ -57,12 +71,14 @@ impl Buffer {
         }
         f.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let rope = Rope::from_reader(BufReader::new(f)).map_err(|e| e.to_string())?;
+        let indent = detect_indent(&rope, 4);
         Ok(Self {
             path: Some(path.to_path_buf()),
             rope,
             cursor: (0, 0),
             modified: false,
             rev: 0,
+            indent,
             untitled: false,
             ai: false,
             undo: Undo::default(),
@@ -77,6 +93,7 @@ impl Buffer {
             cursor: (0, 0),
             modified: false,
             rev: 0,
+            indent: IndentKind::Spaces(4),
             untitled: true,
             ai: false,
             undo: Undo::default(),
@@ -87,13 +104,12 @@ impl Buffer {
     /// Transcript de AI: nunca persistent, nunca LSP.
     pub fn ai() -> Self {
         Self {
-            path: None,
-            rope: Rope::from_str(
-                "◆ claude — escribe el prompt en una línea y Enter.\n\n",
-            ),
+            rope: Rope::from_str("◆ claude — escribe el prompt en una línea y Enter.\n\n"),
             cursor: (2, 0),
+            path: None,
             modified: false,
             rev: 0,
+            indent: IndentKind::Spaces(4),
             untitled: true,
             ai: true,
             undo: Undo::default(),
@@ -104,6 +120,14 @@ impl Buffer {
     /// ¿se persiste/guarda este buffer? (AI transcript = no)
     pub fn is_persistent(&self) -> bool {
         !self.ai
+    }
+
+    /// Unidad de indentación de este buffer.
+    pub fn indent_unit(&self) -> String {
+        match self.indent {
+            IndentKind::Tabs => "\t".to_string(),
+            IndentKind::Spaces(n) => " ".repeat(n),
+        }
     }
 
     /// Nombre para statusline: solo el archivo (las paths ya son absolutas).
@@ -224,6 +248,15 @@ impl Buffer {
     pub fn to(&mut self, line: usize, graph: usize) {
         self.cursor = (line, graph);
         self.clamp_cursor();
+    }
+
+    /// Grapheme tras la posición del cursor (sin mover).
+    pub fn next_grapheme_char_at_cursor(&self) -> Option<char> {
+        self.line_text(self.cursor.0)
+            .graphemes(true)
+            .skip(self.cursor.1 + 1)
+            .next()
+            .and_then(|g| g.chars().next())
     }
 
     pub fn line_start(&mut self) {
@@ -498,6 +531,236 @@ impl Buffer {
         self.modified = false;
         Ok(())
     }
+
+    // =============================================== primitivas de edición ==
+
+    /// Edición multilínea de UNA pieza: 1 snap por stroke (N líneas en un
+    /// lote = 1 undo si comparten stroke). Cursor lo fija el caller.
+    pub fn replace_range(&mut self, ca: usize, cb: usize, text: &str, stroke: &'static str) {
+        self.snap(stroke);
+        self.rope.remove(ca..cb);
+        if !text.is_empty() {
+            self.rope.insert(ca, text);
+        }
+        self.touch();
+        self.clamp_cursor();
+    }
+
+    /// Prefijo de comentario por extensión.
+    pub fn comment_prefix(&self) -> &'static str {
+        let ext = self
+            .path
+            .as_ref()
+            .and_then(|p| p.extension().and_then(|e| e.to_str()))
+            .unwrap_or("");
+        match ext {
+            "py" | "sh" | "toml" | "yaml" | "yml" | "conf" => "#",
+            "lua" | "sql" | "ps1" => "--",
+            // rs/java/js/ts/c/cpp/hpp/go/swift/kotlin/json... default //
+            _ => "//",
+        }
+    }
+
+    /// Toggle de comentario sobre el rango de líneas [first, last] (incl).
+    /// Decide por la primera línea no vacía. 1 undo si es en <1s.
+    pub fn comment_toggle_lines(&mut self, first: usize, last: usize) {
+        let last = last.min(self.len_lines().saturating_sub(1));
+        let pf = self.comment_prefix();
+        // decisión por la primera línea con contenido
+        let mut add = true;
+        for l in first..=last {
+            let t = self.line_text(l);
+            let nonblank = t.trim_start();
+            if nonblank.is_empty() {
+                continue;
+            }
+            add = !nonblank.starts_with(pf);
+            break;
+        }
+        // (línea, nuevo_texto) — se aplican DESCENDENTE: los offsets aguantan
+        let mut edits: Vec<(usize, String)> = Vec::new();
+        for l in first..=last {
+            let t = self.line_text(l);
+            if t.trim().is_empty() {
+                continue;
+            }
+            let new = if add {
+                format!("{pf} {t}")
+            } else if t.trim_start().starts_with(pf) {
+                let stripped = t.replacen(pf, "", 1);
+                // un espacio tras el prefijo también se quita
+                stripped.replacen(' ', "", 1)
+            } else {
+                t.clone() // sin prefijo: no toca
+            };
+            edits.push((l, new));
+        }
+        for (l, new) in edits.iter().rev() {
+            let (c0, c1) = self.line_char_range(*l);
+            self.replace_range(c0, c1, new, "comment");
+        }
+    }
+
+    /// Indent/dedent del rango [first, last]. 1 undo por stroke "indent".
+    pub fn indent_lines(&mut self, first: usize, last: usize, unit: &str, dedent: bool) {
+        let last = last.min(self.len_lines().saturating_sub(1));
+        let mut edits: Vec<(usize, String)> = Vec::new();
+        for l in first..=last {
+            let t = self.line_text(l);
+            if t.trim().is_empty() {
+                continue;
+            }
+            let new = match dedent {
+                true if t.starts_with(unit) => t[unit.len()..].to_string(),
+                true => t.clone(), // sin unidad que quitar: no-op
+                false => format!("{unit}{t}"),
+            };
+            edits.push((l, new));
+        }
+        for (l, new) in edits.iter().rev() {
+            let (c0, c1) = self.line_char_range(*l);
+            self.replace_range(c0, c1, new, "indent");
+        }
+    }
+
+    // ------------------------------------------------------- bracket match --
+
+    /// Al pariente correspondiente del bracket bajo el cursor. False si no.
+    pub fn bracket_match(&mut self) -> bool {
+        const OPEN: &str = "([{";
+        const CLOSE: &str = ")]}";
+        let (l, g) = self.cursor;
+        let line = self.line_text(l);
+        let Some(c) = line.graphemes(true).nth(g).and_then(|x| x.chars().next()) else {
+            return false;
+        };
+        // forward: buscar el close del opener bajo el cursor
+        if let Some(i) = OPEN.find(c) {
+            let close = CLOSE.as_bytes()[i] as char;
+            let mut depth = 0usize;
+            let mut cur = l;
+            let mut from = g + 1;
+            loop {
+                let text = self.line_text(cur);
+                let gs: Vec<(usize, char)> = text
+                    .graphemes(true)
+                    .enumerate()
+                    .skip(from)
+                    .map(|(i2, x)| (i2, x.chars().next().unwrap()))
+                    .collect();
+                for (ix, ch) in gs {
+                    if ch == c {
+                        depth += 1;
+                    } else if ch == close {
+                        if depth == 0 {
+                            self.to(cur, ix);
+                            return true;
+                        }
+                        depth -= 1;
+                    }
+                }
+                cur += 1;
+                from = 0;
+                if cur >= self.len_lines() {
+                    break;
+                }
+            }
+            return false;
+        }
+        // backward: buscar el opener del close bajo el cursor
+        if let Some(i) = CLOSE.find(c) {
+            let open = OPEN.as_bytes()[i] as char;
+            let mut depth = 0usize;
+            let mut cur = l;
+            loop {
+                let text = self.line_text(cur);
+                let mut gs: Vec<(usize, char)> = text
+                    .graphemes(true)
+                    .enumerate()
+                    .map(|(i2, x)| (i2, x.chars().next().unwrap()))
+                    .collect();
+                if cur == l {
+                    gs.truncate(g); // el cursor mismo no entra
+                }
+                for (ix, ch) in gs.iter().rev() {
+                    let ch = *ch;
+                    if ch == c {
+                        depth += 1;
+                    } else if ch == open {
+                        if depth == 0 {
+                            self.to(cur, *ix);
+                            return true;
+                        }
+                        depth -= 1;
+                    }
+                }
+                if cur == 0 {
+                    break;
+                }
+                cur -= 1;
+            }
+        }
+        false
+    }
+
+    // ---------------------------------------------------------- replace all --
+
+    /// Replace-all smart-case por líneas (1 undo por stroke compartido).
+    /// Devuelve (líneas cambiadas, matches).
+    pub fn replace_all(&mut self, pat: &str, rep: &str) -> (usize, usize) {
+        if pat.is_empty() {
+            return (0, 0);
+        }
+        let smart = pat.chars().any(|c| c.is_uppercase());
+        let mut edits = Vec::new();
+        let mut matches = 0;
+        for l in 0..self.len_lines() {
+            let text = self.line_text(l);
+            if text.is_empty() {
+                continue;
+            }
+            let hits = crate::app::find_all(&text, pat, smart);
+            if hits.is_empty() {
+                continue;
+            }
+            matches += hits.len();
+            let mut new = String::new();
+            let mut last = 0;
+            for (hs, he) in hits {
+                new.push_str(&text[last..hs]);
+                new.push_str(rep);
+                last = he;
+            }
+            new.push_str(&text[last..]);
+            edits.push((l, new));
+        }
+        for (l, new) in edits.iter().rev() {
+            let (c0, c1) = self.line_char_range(*l);
+            self.replace_range(c0, c1, new, "replace");
+        }
+        (edits.len(), matches)
+    }
+
+    // -------------------------------------------------------------- select ---
+
+    /// Rango en chars del rope para (min, max) de líneas/graphemes.
+    /// Line-kind incluye el newline cola; última línea sin newline hasta el
+    /// final del documento.
+    pub fn sel_chars(&self, min: (usize, usize), max: (usize, usize), line_kind: bool) -> (usize, usize) {
+        if line_kind {
+            let c0 = self.rope.line_to_char(min.0);
+            let c1 = if max.0 + 1 < self.len_lines() {
+                self.rope.line_to_char(max.0 + 1)
+            } else {
+                self.rope.len_chars()
+            };
+            (c0, c1)
+        } else {
+            let c0 = self.grapheme_char(min.0, min.1);
+            let c1 = self.grapheme_char(max.0, max.1);
+            (c0.min(c1), c0.max(c1))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -512,6 +775,7 @@ mod tests {
             cursor: (0, 0),
             modified: false,
             rev: 0,
+            indent: IndentKind::Spaces(4),
             untitled: true,
             ai: false,
             undo: Undo::default(),
@@ -618,7 +882,7 @@ mod tests {
     fn cap_de_historia_ajusta_por_tamano() {
         assert_eq!(undo::history_cap(999_999), 100);
         assert_eq!(undo::history_cap(1_000_001), 20);
-        let mut b = buf("");
+        let b = buf("");
         // buffer chico: cap 100 — el límite activo es el de snaps reales
         assert_eq!(undo::history_cap(b.rope.len_bytes()), 100);
     }
@@ -633,5 +897,39 @@ mod tests {
         assert_eq!(b.rev, r0 + 2);
         b.undo();
         assert_eq!(b.rev, r0 + 3, "undo también muta (didChange)");
+    }
+}
+
+/// Indent detection: mayoría entre tabs y patrones de espacios (≤200 líneas).
+fn detect_indent(rope: &Rope, fallback: usize) -> IndentKind {
+    let mut tabs = 0usize;
+    let mut spaces2 = 0;
+    let mut spaces4 = 0;
+    for line in rope.lines().take(200) {
+        let s: String = line.chunks().collect();
+        let lead_len = s.len() - s.trim_start().len();
+        let lead: &str = &s[..lead_len];
+        match lead.chars().next() {
+            Some('\t') => tabs += 1,
+            Some(' ') => {
+                // run de espacios: mide el prefijo común (2/4 en múltiplos)
+                match lead.chars().count() {
+                    n if n % 4 == 0 && n > 0 => spaces4 += 1,
+                    n if n % 2 == 0 && n > 0 => spaces2 += 1,
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    let best_spaces = spaces4.max(spaces2);
+    if tabs >= best_spaces && tabs > 0 {
+        IndentKind::Tabs
+    } else if spaces4 > 0 && spaces4 >= spaces2 {
+        IndentKind::Spaces(4)
+    } else if spaces2 > 0 {
+        IndentKind::Spaces(2)
+    } else {
+        IndentKind::Spaces(fallback)
     }
 }

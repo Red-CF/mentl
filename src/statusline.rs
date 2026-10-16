@@ -16,6 +16,10 @@ pub fn build(app: &mut App, width: usize) -> Line<'static> {
     let (label, chip_bg) = match app.mode {
         Mode::Normal => (" NORMAL ", t.status_bg),
         Mode::Insert => (" INSERT ", t.status_insert_bg),
+        Mode::Visual => match app.selection.map(|s| s.kind) {
+            Some(crate::buffer::SelKind::Line) => (" V-LINE ", t.status_insert_bg),
+            _ => (" VISUAL ", t.status_insert_bg),
+        },
     };
     spans.push(Span::styled(label, Style::new().bg(chip_bg).fg(t.accent)));
 

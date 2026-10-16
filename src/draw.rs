@@ -173,6 +173,21 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
     }
 
     let mut cursor_pos: Option<(u16, u16)> = None;
+    // selección visual (buffer activo) normalizada
+    let sel_norm: Option<((usize, usize), (usize, usize), bool)> = {
+        let head = app.buffers[app.active_buffer()].as_ref().map(|b| b.cursor);
+        match (app.selection, head) {
+            (Some(s), Some(h)) if app.mode == Mode::Visual => {
+                let (a, b) = s.anchor;
+                if (a, b) <= h {
+                    Some(((a, b), h, s.kind == crate::buffer::SelKind::Line))
+                } else {
+                    Some((h, (a, b), s.kind == crate::buffer::SelKind::Line))
+                }
+            }
+            _ => None,
+        }
+    };
     let pane_specs: Vec<(usize, Rect, usize)> = rects
         .iter()
         .filter_map(|(id, r)| {
@@ -207,6 +222,7 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
             app.search.clone(),
             app.theme,
             &diag_by_line,
+            sel_norm.filter(|_| buffer_idx == app.active_buffer()),
             &mut cursor_pos,
         );
     }
@@ -484,6 +500,7 @@ fn draw_pane(
     pat: Option<String>,
     theme: crate::theme::Theme,
     diag_by_line: &std::collections::HashMap<usize, u32>,
+    sel: Option<((usize, usize), (usize, usize), bool)>,
     cursor_pos: &mut Option<(u16, u16)>,
 ) {
     let t = theme;
@@ -529,7 +546,10 @@ fn draw_pane(
             .as_ref()
             .map(|p| find_all(&text, p, smart))
             .unwrap_or_default();
-        rows.push(render_line(&text, cursor_byte, &matches, &t));
+        let sel_mark = sel.and_then(|(min, max, line_kind)| {
+            sel_bytes_for_line(&text, i, min, max, line_kind, cursor.0)
+        });
+        rows.push(render_line(&text, cursor_byte, &matches, sel_mark, &t));
     }
     let text_rect = Rect {
         x: rect.x + gutter_w as u16,
@@ -558,12 +578,45 @@ fn display_width(seg: &str, tab_w: usize) -> usize {
         .sum()
 }
 
+
+/// Byte range de la selección en esta línea (con límites correctos por línea).
+fn sel_bytes_for_line(
+    text: &str,
+    line: usize,
+    min: (usize, usize),
+    max: (usize, usize),
+    line_kind: bool,
+    _cur_line: usize,
+) -> Option<(usize, usize)> {
+    if line_kind {
+        if line >= min.0 && line <= max.0 {
+            return Some((0, text.len()));
+        }
+        return None;
+    }
+    if line < min.0 || line > max.0 {
+        return None;
+    }
+    let a = if line == min.0 {
+        Buffer::grapheme_byte_of(text, min.1)
+    } else {
+        0
+    };
+    let b = if line == max.0 {
+        Buffer::grapheme_byte_of(text, max.1)
+    } else {
+        text.len()
+    };
+    Some((a.min(b), a.max(b)))
+}
+
 /// Spans de línea con estilo por segmentos: normal > match > cursor.
 /// Cubre TODA la línea (0..len).
 fn render_line(
     text: &str,
     cursor_byte: Option<(usize, Mode)>,
     matches: &[(usize, usize)],
+    sel: Option<(usize, usize)>,
     t: &crate::theme::Theme,
 ) -> Line<'static> {
     if text.is_empty() {
@@ -580,12 +633,15 @@ fn render_line(
         let next = text[cb..].graphemes(true).next().map(|g| g.len()).unwrap_or(0);
         (cb, (cb + next).min(text.len()), m)
     });
-    let mut marks: Vec<(usize, usize, bool)> = Vec::new();
+    let mut marks: Vec<(usize, usize, u8)> = Vec::new(); // 0 sel, 1 cursor
     if let Some((s, e, _)) = cursor_range {
-        marks.push((s, e, true));
+        marks.push((s, e, 1));
     }
     for (s, e) in matches {
-        marks.push((*s, *e, false));
+        marks.push((*s, *e, 0));
+    }
+    if let Some((s, e)) = sel {
+        marks.push((s, e, 0)); // mismo peso que match — el estilo difiere
     }
     let mut pts: Vec<usize> = marks.iter().flat_map(|m| [m.0, m.1]).collect();
     pts.push(0);
@@ -602,12 +658,14 @@ fn render_line(
             .filter(|(s, e, _)| a >= *s && a < *e)
             .map(|(_, _, m)| m);
         let is_match = matches.iter().any(|(s, e)| a >= *s && a < *e);
+        let is_sel = sel.is_some_and(|(s, e)| a >= s && a < e);
         let piece = text.get(a..b).unwrap_or("").to_string();
         let style = match cursor_mode {
             Some(Mode::Normal) => Style::new().bg(t.accent).fg(t.cursor_fg),
             Some(Mode::Insert) => {
                 Style::new().underlined().fg(t.fg).underline_color(t.accent)
             }
+            _ if is_sel => Style::new().bg(t.visual_bg).fg(t.fg),
             _ if is_match => Style::new().bg(t.match_bg).fg(t.cursor_fg),
             _ => Style::new().fg(t.fg),
         };

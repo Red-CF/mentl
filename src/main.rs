@@ -98,7 +98,7 @@ fn apply_cursor_style(app: &mut App) {
     }
     app.cursor_style_dirty = false;
     let style = match app.mode {
-        mentl::keymap::Mode::Normal => app.cursor_style,
+        mentl::keymap::Mode::Normal | mentl::keymap::Mode::Visual => app.cursor_style,
         mentl::keymap::Mode::Insert => match app.cursor_style {
             // en insert bar/underline se mantienen; block pasa a bar:
             // el cursor friki "se estira" al escribir

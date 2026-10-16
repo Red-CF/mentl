@@ -42,11 +42,12 @@ pub struct Keys {
     pub leader: String,
     pub normal: HashMap<String, String>,
     pub insert: HashMap<String, String>,
+    pub visual: HashMap<String, String>,
 }
 
 impl Default for Keys {
     fn default() -> Self {
-        let normal = [
+        let mut normal: HashMap<String, String> = [
             ("h", "cursor_left"), ("j", "cursor_down"), ("k", "cursor_up"),
             ("l", "cursor_right"), ("w", "word_next"), ("b", "word_prev"),
             ("Up", "cursor_up"), ("Down", "cursor_down"),
@@ -73,14 +74,38 @@ impl Default for Keys {
         .into_iter()
         .map(|(k, v)| (k.into(), v.into()))
         .collect();
-        let insert = [
+        let insert: HashMap<String, String> = [
             ("Esc", "normal_mode"),
             ("Del", "delete_char"),
         ]
         .into_iter()
         .map(|(k, v)| (k.into(), v.into()))
         .collect();
-        Self { leader: " ".into(), normal, insert }
+        let visual: HashMap<String, String> = [
+            ("Esc", "normal_mode"),
+            ("v", "visual_char"), ("V", "visual_line"),
+            ("d", "visual_delete"), ("y", "visual_yank"),
+            (">", "visual_indent"), ("<", "visual_dedent"),
+            ("c", "visual_comment"),
+            // mismo set de motions
+            ("h", "cursor_left"), ("j", "cursor_down"), ("k", "cursor_up"), ("l", "cursor_right"),
+            ("Up", "cursor_up"), ("Down", "cursor_down"), ("Left", "cursor_left"), ("Right", "cursor_right"),
+            ("w", "word_next"), ("b", "word_prev"),
+            ("0", "line_start"), ("$", "line_end"),
+            ("g g", "file_start"), ("G", "file_end"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+        // bindings nuevos de lote de edición (todos libres, verificado)
+        normal.insert("v".into(), "visual_mode".into());
+        normal.insert("V".into(), "visual_line_mode".into());
+        normal.insert("y y".into(), "yank_line".into());
+        normal.insert("p".into(), "paste_after".into());
+        normal.insert("leader %".into(), "bracket_match".into());
+        normal.insert("leader r".into(), "replace_prompt".into());
+        normal.insert("leader G".into(), "goto_line_prompt".into());
+        Self { leader: " ".into(), normal, insert, visual }
     }
 }
 
@@ -100,6 +125,7 @@ pub struct ThemeConfig {
     pub diag_error: Option<String>,
     pub diag_warn: Option<String>,
     pub sidebar_bg: Option<String>,
+    pub visual_bg: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]

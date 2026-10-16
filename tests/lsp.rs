@@ -12,7 +12,7 @@ fn hub() -> lsp::LspHub {
 }
 
 fn mock_cfg() -> (LspCfg, ServerCfg) {
-    let mut cfg = LspCfg::default();
+    let cfg = LspCfg::default();
     let server = ServerCfg {
         command: vec![env!("CARGO_BIN_EXE_mentl-lsp-mock").to_string()],
     };

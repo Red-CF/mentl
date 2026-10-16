@@ -79,6 +79,16 @@ fn main() {
         b.undo();
     });
 
+    // ------------------------------------------------- fase 4: lote de edición --
+    bench("comment_toggle 500 líneas", iters, || {
+        b.comment_toggle_lines(0, 499);
+        b.comment_toggle_lines(0, 499); // toggle ida+ vuelta: buffer estable
+    });
+    bench("replace_all 5k (~1.2k matches)", iters, || {
+        b.replace_all("fn fn_", "funcion_");
+        b.replace_all("funcion_", "fn fn_"); // ida y vuelta
+    });
+
     // -------------------------------------------------------------- keymap --
     let f = std::env::temp_dir().join("mentl-bench-fixture.txt");
     std::fs::write(&f, &text).unwrap();

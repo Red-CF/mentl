@@ -81,6 +81,22 @@ pub struct App {
     pub welcome_input: Option<String>,
     pub anim_frame: u8,
     pub anim_last: Instant,
+    // --------------------------------------------------- fase 4: edición ---
+    pub selection: Option<Selection>,
+    pub clipboard: (Vec<String>, bool /*kind line? */),
+    pub goto_prompt: bool,
+    pub goto_input: String,
+    pub replace_prompt: bool,
+    pub replace_stage: u8, // 0 = patrón, 1 = reemplazo
+    pub replace_input: String,
+    pub replace_pattern: String,
+}
+
+/// Selección: ancla fija + cabeza (cursor). Kind por cómo se entró (v/V).
+#[derive(Clone, Copy, Debug)]
+pub struct Selection {
+    pub anchor: (usize, usize),
+    pub kind: crate::buffer::SelKind,
 }
 
 pub struct CompletionPopup {
@@ -210,6 +226,14 @@ impl App {
             welcome_input: None,
             anim_frame: 0,
             anim_last: Instant::now(),
+            selection: None,
+            clipboard: (Vec::new(), false),
+            goto_prompt: false,
+            goto_input: String::new(),
+            replace_prompt: false,
+            replace_stage: 0,
+            replace_input: String::new(),
+            replace_pattern: String::new(),
         };
         // proyecto real (dir arg o sin args) => árbol abierto
         if no_arg || arg_is_dir {
@@ -493,4 +517,4 @@ pub fn find_all(text: &str, pat: &str, smart: bool) -> Vec<(usize, usize)> {
         }
     }
     out
-}
+}mod edit;

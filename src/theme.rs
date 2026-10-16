@@ -43,6 +43,7 @@ pub struct Theme {
     pub diag_error: Color,
     pub diag_warn: Color,
     pub sidebar_bg: Color,
+    pub visual_bg: Color,
 }
 
 fn hex(s: &str) -> Option<Color> {
@@ -72,6 +73,7 @@ impl Theme {
             diag_error: pick(&cfg.diag_error, Color::Rgb(0xf7, 0x76, 0x8e)),
             diag_warn: pick(&cfg.diag_warn, Color::Rgb(0xe0, 0xaf, 0x78)),
             sidebar_bg: pick(&cfg.sidebar_bg, Color::Rgb(0x17, 0x1c, 0x2c)),
+            visual_bg: pick(&cfg.visual_bg, Color::Rgb(0x33, 0x41, 0x55)),
         }
     }
 }

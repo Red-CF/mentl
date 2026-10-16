@@ -16,6 +16,9 @@
 | parse_diagnostics 300 | 236 µs | solo en publish |
 | draw frame 5k (120×40) | 172 µs | solo con need_draw — cap teórico ~5-6k fps |
 
+| comment_toggle 500 líneas (ida+vuelta) | 2.0 ms | replace_range + snap por línea |
+| replace_all 5k (~1.2k matches) | 46.5 ms | síncrono — sobre el umbral de 50ms al doblar tamaño: async queda para lote 2 |
+
 ## Roadmap de optimización (por coste real medido)
 
 1. **line_text sin alloc** — `line_len` ya clona String por call; mover el cursor

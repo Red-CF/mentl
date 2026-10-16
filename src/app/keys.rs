@@ -9,7 +9,10 @@ use crate::buffer::Buffer;
 use crate::input::InputKey;
 use crate::keymap::{Mode, Match};
 use crate::action::Action;
+use crate::app::Selection;
+use crate::app::edit::VisualOp;
 use crate::panes::{Dir, Focus};
+use unicode_segmentation::UnicodeSegmentation;
 use crate::finder::Finder;
 
 impl App {
@@ -111,6 +114,52 @@ impl App {
             CursorStyleNext => {
                 self.cursor_style = self.cursor_style.next();
                 self.cursor_style_dirty = true;
+            }
+            BracketMatch => {
+                self.buffer().bracket_match();
+            }
+            YankLine => self.yank_line(),
+            PasteAfter => self.paste_after(),
+            VisualMode => {
+                self.selection = Some(Selection {
+                    anchor: self.buffer().cursor,
+                    kind: crate::buffer::SelKind::Char,
+                });
+                self.mode = Mode::Visual;
+                self.cursor_style_dirty = true;
+            }
+            VisualLineMode => {
+                self.selection = Some(Selection {
+                    anchor: self.buffer().cursor,
+                    kind: crate::buffer::SelKind::Line,
+                });
+                self.mode = Mode::Visual;
+                self.cursor_style_dirty = true;
+            }
+            VisualChar => {
+                if let Some(s) = self.selection.as_mut() {
+                    s.kind = crate::buffer::SelKind::Char;
+                }
+            }
+            VisualLine => {
+                if let Some(s) = self.selection.as_mut() {
+                    s.kind = crate::buffer::SelKind::Line;
+                }
+            }
+            VisualDelete => self.visual_op(VisualOp::Delete),
+            VisualYank => self.visual_op(VisualOp::Yank),
+            VisualIndent => self.visual_op(VisualOp::Indent),
+            VisualDedent => self.visual_op(VisualOp::Dedent),
+            VisualComment => self.visual_op(VisualOp::Comment),
+            ReplacePrompt => {
+                self.replace_prompt = true;
+                self.replace_stage = 0;
+                self.replace_input.clear();
+                self.replace_pattern.clear();
+            }
+            GotoLinePrompt => {
+                self.goto_prompt = true;
+                self.goto_input.clear();
             }
             Hover => self.lsp_request_at_cursor(HoverOrDef::Hover),
             GotoDef => self.lsp_request_at_cursor(HoverOrDef::Def),
@@ -342,24 +391,20 @@ impl App {
             (K::Enter, _) => {
                 if self.buffer().ai {
                     self.ai_submit();
-                } else {
-                    self.buffer().insert_text("\n", "insert");
-                    self.trigger_completion();
+                    return;
                 }
+                self.enter_autoindent();
             }
             (K::Char(c), false) => {
-                self.buffer().insert_text(&c.to_string(), "insert");
                 if self.buffer().ai {
-                    // transcript: no completions
-                } else if self.completion.is_some() {
-                    self.completion_refilter();
-                } else {
-                    self.trigger_completion();
+                    self.buffer().insert_text(&c.to_string(), "insert");
+                    return;
                 }
+                self.insert_char_smart(c);
             }
             (K::Tab, _) => {
-                let w = self.config.editor.tab_width;
-                self.buffer().insert_text(&" ".repeat(w), "insert");
+                let unit = self.buffer().indent_unit();
+                self.buffer().insert_text(&unit, "insert");
             }
             (K::Backspace, _) => {
                 self.buffer().delete_back();
@@ -417,6 +462,14 @@ impl App {
             self.search_key(k);
             return;
         }
+        if self.goto_prompt {
+            self.goto_key(k);
+            return;
+        }
+        if self.replace_prompt {
+            self.replace_key(k);
+            return;
+        }
         if self.finder.is_some() {
             self.finder_key(k);
             return;
@@ -446,4 +499,66 @@ impl App {
         self.follow_cursor();
     }
 
+    /// Char en insert: auto-close de pares + skip-over; el par = 1 edición.
+    fn insert_char_smart(&mut self, c: char) {
+        match c {
+            '(' => self.insert_pair('(', ')'),
+            '[' => self.insert_pair('[', ']'),
+            '"' | '\'' | '`' => {
+                let next = self.buffer().next_grapheme_char_at_cursor();
+                if next == Some(c) && !self.prev_char_is_word() {
+                    self.buffer().mv(0, 1); // salta sobre la existente
+                    return;
+                }
+                if self.prev_char_is_word() {
+                    self.buffer().insert_text(&c.to_string(), "insert");
+                } else {
+                    self.buffer().insert_text(&format!("{c}{c}"), "insert");
+                    self.buffer().mv(0, -1);
+                }
+            }
+            ')' | ']' | '}' => {
+                let next = self.buffer().next_grapheme_char_at_cursor();
+                if next == Some(c) {
+                    self.buffer().mv(0, 1); // skip-over, sin rev
+                    return;
+                }
+                self.buffer().insert_text(&c.to_string(), "insert");
+            }
+            ch => self.buffer().insert_text(&ch.to_string(), "insert"),
+        }
+        if self.completion.is_some() {
+            self.completion_refilter();
+        } else {
+            self.trigger_completion();
+        }
+    }
+
+    fn insert_pair(&mut self, open: char, close: char) {
+        self.buffer().insert_text(&format!("{open}{close}"), "insert");
+        self.buffer().mv(0, -1);
+    }
+
+    fn prev_char_is_word(&self) -> bool {
+        let b = self.buffers[self.active_buffer()].as_ref().expect("vivo");
+        let text = b.line_text(b.cursor.0);
+        text.graphemes(true)
+            .nth(b.cursor.1)
+            .and_then(|g| g.chars().next())
+            .map(crate::buffer::is_word)
+            .unwrap_or(false)
+    }
+
+    /// Enter con autoindent: sangría heredada +1 unidad si abre bloque.
+    fn enter_autoindent(&mut self) {
+        let (l, _) = self.buffer().cursor;
+        let text = self.buffer().line_text(l);
+        let lead: String = text.chars().take_while(|&c| c == ' ' || c == '\t').collect();
+        let unit = self.buffer().indent_unit();
+        let opens = text.trim_end().ends_with('{')
+            || text.trim_end().ends_with('(')
+            || text.trim_end().ends_with('[');
+        let extra = match opens { true => unit, false => String::new() };
+        self.buffer().insert_text(&format!("\n{lead}{extra}"), "insert");
+    }
 }

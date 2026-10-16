@@ -10,6 +10,7 @@ use crate::input::InputKey;
 pub enum Mode {
     Normal,
     Insert,
+    Visual,
 }
 
 #[derive(Debug)]
@@ -35,7 +36,11 @@ impl KeyMap {
     pub fn build(cfg: &Keys) -> (Self, Vec<String>) {
         let mut map = Self::default();
         let mut warnings = Vec::new();
-        for (mode, table) in [(Mode::Normal, &cfg.normal), (Mode::Insert, &cfg.insert)] {
+        for (mode, table) in [
+            (Mode::Normal, &cfg.normal),
+            (Mode::Insert, &cfg.insert),
+            (Mode::Visual, &cfg.visual),
+        ] {
             for (seq, act) in table {
                 let ids: Vec<&str> = seq.split_whitespace().collect();
                 let mut keys = Vec::new();
@@ -80,8 +85,11 @@ impl KeyMap {
         if seq.is_empty() {
             return Match::None;
         }
+        let Some(binds) = self.modes.get(&mode) else {
+            return Match::None;
+        };
         let mut prefix = false;
-        for b in &self.modes[&mode] {
+        for b in binds {
             if b.keys.len() == seq.len() && b.keys.as_slice() == seq {
                 return Match::Action(action::parse(&b.action).unwrap());
             }
