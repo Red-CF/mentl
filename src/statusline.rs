@@ -26,8 +26,44 @@ pub fn build(app: &mut App, width: usize) -> Line<'static> {
         app.live_msg().unwrap_or_default()
     };
     let name = app.buffer().display_name();
-    let name_span = format!(" {}{}", name, if app.buffer().modified { " [+] " } else { " " });
+    let modified = if app.buffer().modified { " [+]" } else { "" };
+    // chips de diagnósticos del buffer actual (solo si hay algunos)
+    let path = app.buffer().path.clone();
+    let (nd_err, nd_warn) = path
+        .as_ref()
+        .and_then(|p| app.diagnostics.get(p))
+        .map(|ds| (
+            ds.iter().filter(|d| d.severity == 1).count(),
+            ds.iter().filter(|d| d.severity == 2).count(),
+        ))
+        .unwrap_or((0, 0));
+    let diag_chip = match (nd_err, nd_warn) {
+        (0, 0) => String::new(),
+        (e, 0) => format!("E{e}"),
+        (0, w) => format!("W{w}"),
+        (e, w) => format!("E{e} W{w}"),
+    };
+    // chip de servidor lsp arrancando (jdtls tarda 10-60s — señal obligatoria)
+    let lang = path.as_ref().and_then(|p| app.lsp.language_of(p));
+    let lsp_chip = match lang {
+        Some(l) if app.lsp.is_ready(l) => String::new(),
+        Some(l) if app.lsp.ready(l).is_some() => format!(" lsp:{l} ⋯"),
+        _ => String::new(),
+    };
+    let name_span = format!(" {name}{diag_chip}{lsp_chip}{modified} ");
     spans.push(Span::styled(name_span, Style::new().bg(t.status_bg).fg(t.fg)));
+
+    if !diag_chip.is_empty() {
+        let style = if nd_err > 0 {
+            Style::new().bg(t.status_bg).fg(t.diag_error)
+        } else {
+            Style::new().bg(t.status_bg).fg(t.diag_warn)
+        };
+        spans.push(Span::styled(format!("{diag_chip} "), style));
+    }
+    if !lsp_chip.is_empty() {
+        spans.push(Span::styled(format!("{lsp_chip} "), Style::new().bg(t.status_bg).fg(t.gutter)));
+    }
 
     if !center.is_empty() {
         spans.push(Span::styled(

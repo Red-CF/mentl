@@ -1,6 +1,8 @@
 //! Estado del app + dispatch. La capa bazel/LSP futura conecta aquí: nueva
 //! Action y nuevo match arm — nada del modelo de texto cambia.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::action::Action;
@@ -9,6 +11,7 @@ use crate::config::{self, Config};
 use crate::finder::Finder;
 use crate::input::InputKey;
 use crate::keymap::{Mode, KeyMap, Match};
+use crate::lsp::{self, Diag, LspEvent};
 use crate::panes::{Dir, Focus, Panes};
 use crate::theme::{CursorStyle, Theme};
 use ratatui::layout::Rect;
@@ -49,6 +52,15 @@ pub struct App {
     pub config_error: Option<String>,
     /// altura del viewport de editor conocida en el último draw (24 default)
     pub last_view_h: usize,
+    pub lsp: lsp::LspHub,
+    pub diagnostics: HashMap<std::path::PathBuf, Vec<Diag>>,
+    /// hover en espera: req_id, cursor al pedir, instante
+    pub hover_wait: Option<(u64, (usize, usize), Instant)>,
+    pub hover: Option<String>,
+    /// pending goto-def: req_id, cursor de origen, instante
+    pub def_wait: Option<(u64, (usize, usize), Instant)>,
+    /// didChange debounce: path -> (último rev mandado, primera ed sin mandar)
+    pub sync_state: HashMap<std::path::PathBuf, (u64, Option<Instant>)>,
 }
 
 impl App {
@@ -98,7 +110,7 @@ impl App {
         if buffers.is_empty() {
             buffers.push(Buffer::empty(None));
         }
-        Self {
+        let mut app = Self {
             screen,
             mode: Mode::Normal,
             buffers,
@@ -123,7 +135,24 @@ impl App {
             picker_scroll: 0,
             config_error,
             last_view_h: 24,
+            lsp: lsp::LspHub::default(),
+            diagnostics: HashMap::new(),
+            hover_wait: None,
+            hover: None,
+            def_wait: None,
+            sync_state: HashMap::new(),
+        };
+        // arranca client si el buffer inicial es de un lenguaje LSP
+        if app.screen == Screen::Editor {
+            let p = app.buffer().path.clone();
+            if let Some(p) = p {
+                if let Some(lang) = app.lsp.language_of(&p) {
+                    app.lsp.ensure_client(lang, &app.config.lsp, app.config.lsp_server(lang));
+                    app.lsp_did_open(&p);
+                }
+            }
         }
+        app
     }
 
     /// Índice del buffer del pane activo.
@@ -137,9 +166,31 @@ impl App {
     }
 
     pub fn open_in_pane(&mut self, path: &std::path::Path) -> Result<(), String> {
+        // didClose del buffer que sale, si era archivo
+        let old_path = { self.buffer().path.clone() };
+        if let Some(old) = &old_path {
+            let lang = self.lsp.language_of(old);
+            if let Some(lang) = lang {
+                let uri = lsp::types::path_to_uri(old);
+                self.lsp.notify(lang, "textDocument/didClose", serde_json::json!({
+                    "textDocument": {"uri": uri}
+                }));
+                self.diagnostics.remove(old);
+                self.sync_state.remove(old);
+            }
+        }
         let b = Buffer::open(path)?;
         let idx = self.active_buffer();
         self.buffers[idx] = b;
+        let new_path = self.buffer().path.clone();
+        if let Some(p) = new_path {
+            // arranca/asegura client para este lenguaje y manda didOpen
+            let lang = self.lsp.language_of(&p);
+            if let Some(lang) = lang {
+                self.lsp.ensure_client(lang, &self.config.lsp, self.config.lsp_server(lang));
+                self.lsp_did_open(&p);
+            }
+        }
         Ok(())
     }
 
@@ -147,8 +198,8 @@ impl App {
         self.msg = Some((s.into(), Instant::now()));
     }
 
-    /// Tick del loop principal: timeout de chord + decay de mensaje.
-    /// Devuelve true si algo cambió y hace falta redibujar.
+    /// Tick del loop principal: timeout de chord + decay de mensaje + debounce
+    /// de didChange LSP. Devuelve true si algo cambió visualmente.
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
         if !self.pending.is_empty() {
@@ -164,7 +215,212 @@ impl App {
                 changed = true;
             }
         }
+        self.lsp_sync_tick();
         changed
+    }
+
+    /// didChange LSP con sync completo, debounce desde la PRIMERA edición sin
+    /// mandar. Mandar NO se dibuja — solo la llegada de diagnósticos.
+    fn lsp_sync_tick(&mut self) {
+        if !self.config.lsp.enabled {
+            return;
+        }
+        let debounce = std::time::Duration::from_millis(self.config.lsp.debounce_ms);
+        let mut to_send: Vec<(&'static str, PathBuf, String)> = Vec::new();
+        for b in &self.buffers {
+            let Some(path) = b.path.clone() else { continue };
+            let Some(lang) = self.lsp.language_of(&path) else { continue };
+            if !self.lsp.is_ready(lang) {
+                continue;
+            }
+            let state = self.sync_state.entry(path.clone())
+                .or_insert((u64::MAX, None));
+            let (sent_rev, pending_since) = *state;
+            if b.rev != sent_rev {
+                let since = pending_since.unwrap_or(Instant::now());
+                state.1 = Some(since);
+                if since.elapsed() >= debounce {
+                    let text = b
+                        .rope
+                        .lines()
+                        .map(|l| l.to_string())
+                        .collect::<Vec<_>>()
+                        .join("");
+                    to_send.push((lang, path.clone(), text));
+                }
+            }
+        }
+        for (lang, path, text) in to_send {
+            let uri = lsp::types::path_to_uri(&path);
+            let params = serde_json::json!({
+                "textDocument": {
+                    "uri": uri,
+                    "version": 0,
+                    "languageId": lang,
+                    "text": text,
+                }
+            });
+            // marca rev como mandado ANTES de que lleguen diagnósticos nuevos
+            let rev = self.buffers.iter().find(|b| b.path.as_ref() == Some(&path))
+                .map(|b| b.rev)
+                .unwrap_or(0);
+            self.sync_state.insert(path, (rev, None));
+            self.lsp.notify(lang, "textDocument/didChange", params);
+        }
+    }
+
+    /// didOpen — solo si el server ya está ready (si no, lo manda on Started).
+    pub fn lsp_did_open(&mut self, path: &PathBuf) {
+        if !self.config.lsp.enabled {
+            return;
+        }
+        let Some(lang) = self.lsp.language_of(path) else { return };
+        if !self.lsp.is_ready(lang) {
+            return;
+        }
+        let Some(text_b) = self.buffers.iter().find(|b| b.path.as_ref() == Some(path)) else { return };
+        let text = text_b.rope.lines().map(|l| l.to_string()).collect::<Vec<_>>().join("");
+        let rev = text_b.rev;
+        let uri = lsp::types::path_to_uri(path);
+        let params = serde_json::json!({
+            "textDocument": {"uri": uri, "version": 0, "languageId": lang, "text": text}
+        });
+        self.sync_state.insert(path.clone(), (rev, None));
+        self.lsp.notify(lang, "textDocument/didOpen", params);
+    }
+
+    /// Eventos LSP desde el hub. true = redibujar.
+    pub fn on_lsp(&mut self) -> bool {
+        let events = self.lsp.drain();
+        let mut need = false;
+        for ev in events {
+            match ev {
+                LspEvent::Started { lang } => {
+                    if self.lsp.mark_ready(lang) {
+                        // didOpen de buffers ya abiertos de este lenguaje
+                        let paths: Vec<PathBuf> = self
+                            .buffers
+                            .iter()
+                            .filter(|b| {
+                                b.path.as_ref()
+                                    .is_some_and(|p| self.lsp.language_of(p) == Some(lang))
+                            })
+                            .map(|b| b.path.clone().unwrap())
+                            .collect();
+                        for p in paths {
+                            self.lsp_did_open(&p);
+                        }
+                    }
+                }
+                LspEvent::StartedFailed { lang, err } => {
+                    self.status_msg(format!("lsp:{lang} no arranca — {err}"));
+                    self.lsp.remove(lang);
+                }
+                LspEvent::Died { lang, err } => {
+                    self.status_msg(format!("lsp:{lang} caído — {err}"));
+                    self.lsp.remove(lang);
+                    need = true;
+                }
+                LspEvent::Diagnostics { uri, diags } => {
+                    if let Some(path) = lsp::types::uri_to_path(&uri) {
+                        let converted: Vec<Diag> = diags
+                            .into_iter()
+                            .map(|d| {
+                                // convierte UTF-16 -> graphemes SI el buffer está abierto
+                                let (line, col) =
+                                    match self.buffers.iter_mut().find(|b| same_path(b.path.as_ref(), Some(&path))) {
+                                        Some(b) => b.pos_of_lsp(d.line, d.character),
+                                        None => (d.line as usize, d.character as usize),
+                                    };
+                                Diag { line, col, severity: d.severity, msg: d.msg }
+                            })
+                            .collect();
+                        self.diagnostics.insert(path, converted);
+                        need = true;
+                    }
+                }
+                LspEvent::Response { req_id, body } => {
+                    // hover pendiente con este id?
+                    let hover_hit = self.hover_wait.as_ref().is_some_and(|(r, _, _)| *r == req_id);
+                    if hover_hit {
+                        self.hover_wait = None;
+                        self.hover = lsp::types::parse_hover(&body);
+                        need = self.hover.is_some();
+                    } else {
+                        let def_hit = self.def_wait.as_ref().is_some_and(|(r, _, _)| *r == req_id);
+                        if def_hit {
+                            let (_, origin, _) = self.def_wait.take().unwrap();
+                            let locs = lsp::types::parse_definition(&body);
+                            self.goto_locations(locs, origin);
+                            need = true;
+                        }
+                    }
+                }
+            }
+        }
+        need
+    }
+
+    pub fn goto_locations(&mut self, locs: Vec<lsp::types::DefLocation>, _from: (usize, usize)) {
+        let Some(first) = locs.first() else {
+            self.status_msg("sin definición");
+            return;
+        };
+        if locs.len() > 1 {
+            self.status_msg(format!("{} definiciones — voy a la primera", locs.len()));
+        }
+        let Some(path) = lsp::types::uri_to_path(&first.uri) else {
+            self.status_msg("def: uri no file");
+            return;
+        };
+        let same = same_path(self.buffer().path.as_ref(), Some(&path));
+        if !same {
+            if let Err(e) = self.open_in_pane(&path) {
+                self.status_msg(format!("no puedo abrir: {e}"));
+                return;
+            }
+        }
+        let (l, g) = self.buffer().pos_of_lsp(first.line, first.character);
+        self.buffer().to(l, g);
+        self.follow_cursor();
+    }
+
+    pub fn lsp_request_at_cursor(&mut self, kind: HoverOrDef) {
+        let path = match self.buffer().path.clone() {
+            Some(p) => p,
+            None => {
+                self.status_msg("buffer sin archivo");
+                return;
+            }
+        };
+        let Some(lang) = self.lsp.language_of(&path) else {
+            self.status_msg("sin lsp para este tipo de archivo");
+            return;
+        };
+        if !self.lsp.is_ready(lang) {
+            self.status_msg(format!("lsp:{lang} aún arrancando…"));
+            return;
+        }
+        let (l, g) = self.buffer().cursor;
+        let (ll, col) = self.buffer().lsp_pos_of(l, g);
+        let params = serde_json::json!({
+            "textDocument": {"uri": lsp::types::path_to_uri(&path)},
+            "position": {"line": ll, "character": col},
+        });
+        let method = match kind {
+            HoverOrDef::Hover => "textDocument/hover",
+            HoverOrDef::Def => "textDocument/definition",
+        };
+        let Some(req_id) = self.lsp.request(lang, method, params) else { return };
+        match kind {
+            HoverOrDef::Hover => {
+                self.hover = None;
+                self.hover_wait = Some((req_id, (l, g), Instant::now()));
+            }
+            HoverOrDef::Def => {
+                self.def_wait = Some((req_id, (l, g), Instant::now()));
+            }
+        }
     }
 
     /// Recarga config TOML; roto = mantiene todo como estaba + msg.
@@ -218,6 +474,18 @@ impl App {
     // --------------------------------------------------------------- keys ---
 
     pub fn on_key(&mut self, k: InputKey) {
+        // hover se cierra con cualquier tecla (y esa tecla sigue su curso)
+        if self.hover.is_some() {
+            self.hover = None;
+        }
+        // hover/def timeouts (stale)
+        for slot in [&mut self.hover_wait, &mut self.def_wait] {
+            if let Some((_, _, until)) = slot {
+                if until.elapsed() > std::time::Duration::from_secs(3) {
+                    *slot = None;
+                }
+            }
+        }
         if self.screen == Screen::Welcome {
             match k.code {
                 crossterm::event::KeyCode::Char('q') | crossterm::event::KeyCode::Esc => {
@@ -401,7 +669,10 @@ impl App {
             SearchNext => self.do_search(true),
             SearchPrev => self.do_search(false),
             Save => match self.buffer().save() {
-                Ok(()) => self.status_msg("guardado ✓"),
+                Ok(()) => {
+                    self.status_msg("guardado ✓");
+                    self.lsp_did_save();
+                }
                 Err(e) => self.status_msg(e),
             },
             Quit => {
@@ -437,6 +708,8 @@ impl App {
                 self.cursor_style = self.cursor_style.next();
                 self.cursor_style_dirty = true;
             }
+            Hover => self.lsp_request_at_cursor(HoverOrDef::Hover),
+            GotoDef => self.lsp_request_at_cursor(HoverOrDef::Def),
         }
         self.follow_cursor();
     }
@@ -520,6 +793,57 @@ impl App {
             return;
         }
         self.status_msg(format!("sin coincidencia: {pat}"));
+    }
+    /// didSave con texto (algunos servers lo exigen).
+    pub fn lsp_did_save(&mut self) {
+        if !self.config.lsp.enabled {
+            return;
+        }
+        let Some(path) = self.buffer().path.clone() else { return };
+        let Some(lang) = self.lsp.language_of(&path) else { return };
+        if !self.lsp.is_ready(lang) {
+            return;
+        }
+        let text = self
+            .buffer()
+            .rope
+            .lines()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("");
+        self.lsp.notify(
+            lang,
+            "textDocument/didSave",
+            serde_json::json!({
+                "textDocument": {"uri": lsp::types::path_to_uri(&path)},
+                "text": text,
+            }),
+        );
+    }
+
+    /// Cierra clientes LSP limpio (best-effort).
+    pub fn lsp_shutdown(&mut self) {
+        self.lsp.shutdown();
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum HoverOrDef {
+    Hover,
+    Def,
+}
+
+/// Comparación de paths tolerante (canonicalize con fallback a string).
+pub fn same_path(a: Option<&PathBuf>, b: Option<&PathBuf>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            if a == b {
+                return true;
+            }
+            std::fs::canonicalize(a).ok().as_ref()
+                == std::fs::canonicalize(b).ok().as_ref()
+        }
+        _ => false,
     }
 }
 

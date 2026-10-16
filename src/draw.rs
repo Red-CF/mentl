@@ -78,6 +78,17 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
         let active = pane_id == app.panes.active;
         let Some(pane) = app.panes.panes.get(pane_id) else { continue };
         let scroll = pane.view.scroll;
+        // severidad por línea (min = más grave primero): 1 error > 2 warn > resto
+        let path = app.buffers[buffer_idx].path.clone();
+        let mut diag_by_line: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
+        if let Some(p) = path.as_ref() {
+            if let Some(ds) = app.diagnostics.get(p) {
+                for d in ds {
+                    let e = diag_by_line.entry(d.line).or_insert(u32::MAX);
+                    *e = (*e).min(d.severity);
+                }
+            }
+        }
         draw_pane(
             f,
             rect,
@@ -88,6 +99,7 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
             app.mode,
             app.search.clone(),
             app.theme,
+            &diag_by_line,
             &mut cursor_pos,
         );
     }
@@ -106,6 +118,9 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
     if app.finder.is_some() {
         cursor_pos = None;
         draw_finder(f, area, app);
+    } else if app.hover.is_some() {
+        cursor_pos = None;
+        draw_hover(f, area, app);
     }
 
     if let Some((x, y)) = cursor_pos {
@@ -123,6 +138,7 @@ fn draw_pane(
     mode: Mode,
     pat: Option<String>,
     theme: crate::theme::Theme,
+    diag_by_line: &std::collections::HashMap<usize, u32>,
     cursor_pos: &mut Option<(u16, u16)>,
 ) {
     let t = theme;
@@ -133,13 +149,20 @@ fn draw_pane(
     // gutter
     let mut gut: Vec<Line> = Vec::new();
     for i in scroll..(scroll + rect.height as usize).min(len) {
-        let style = if i == cursor.0 {
-            Style::new().fg(t.gutter_active)
-        } else {
-            Style::new().fg(t.gutter)
+        // símbolo diagnóstico en el hueco del separador (sin shift de layout)
+        let (sep_char, sep_style) = match diag_by_line.get(&i) {
+            Some(1) => ("!", Style::new().fg(t.diag_error)),
+            Some(2) => ("!", Style::new().fg(t.diag_warn)),
+            Some(_) => ("i", Style::new().fg(t.gutter)),
+            None => (" ", Style::new()),
+        };
+        let base = if i == cursor.0 { t.gutter_active } else { t.gutter };
+        let style = match diag_by_line.get(&i) {
+            Some(1) | Some(2) => sep_style, // número coloreado por severidad
+            _ => Style::new().fg(base),
         };
         gut.push(Line::styled(
-            format!("{:>width$} ", i + 1, width = gutter_w - 1),
+            format!("{:>width$}{}", i + 1, sep_char, width = gutter_w - 1),
             style,
         ));
     }
@@ -192,6 +215,24 @@ fn display_width(seg: &str, tab_w: usize) -> usize {
         .map(|g| if g == "\t" { tab_w } else { unicode_width::UnicodeWidthStr::width(g) })
         .sum();
     w
+}
+
+fn draw_hover(f: &mut Frame, area: Rect, app: &mut App) {
+    let Some(hover) = &app.hover else { return };
+    let t = app.theme;
+    let w = ((area.width as f32 * 0.5) as u16).min(70).max(30);
+    let h = 8.min(area.height.saturating_sub(2));
+    let x = area.x + area.width.saturating_sub(w + 2);
+    let y = area.y + 1;
+    let rect = Rect { x, y, width: w, height: h };
+    let block = Block::default()
+        .title(" hover ")
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::new().fg(t.accent))
+        .style(Style::new().bg(t.bg));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    f.render_widget(Paragraph::new(hover.clone()), inner);
 }
 
 fn draw_finder(f: &mut Frame, area: Rect, app: &mut App) {

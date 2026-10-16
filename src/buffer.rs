@@ -21,6 +21,8 @@ pub struct Buffer {
     pub cursor: (usize, usize),
     pub modified: bool,
     pub untitled: bool,
+    /// número de revisiones de edición (para debounce de LSP didChange)
+    pub rev: u64,
     pub undo: Undo,
     last_stroke: Option<(&'static str, Instant)>,
 }
@@ -49,6 +51,7 @@ impl Buffer {
             rope,
             cursor: (0, 0),
             modified: false,
+            rev: 0,
             untitled: false,
             undo: Undo::default(),
             last_stroke: None,
@@ -61,6 +64,7 @@ impl Buffer {
             rope: Rope::from_str(""),
             cursor: (0, 0),
             modified: false,
+            rev: 0,
             untitled: true,
             undo: Undo::default(),
             last_stroke: None,
@@ -262,6 +266,12 @@ impl Buffer {
         }
     }
 
+    /// Toda mutación pasa por aquí: modificado + revisión LSP.
+    fn touch(&mut self) {
+        self.modified = true;
+        self.rev += 1;
+    }
+
     /// Inserta texto en el cursor. Actualiza cursor al final del insert.
     pub fn insert_text(&mut self, text: &str, stroke: &'static str) {
         self.snap(stroke);
@@ -276,7 +286,7 @@ impl Buffer {
             self.cursor.1 = last_seg.graphemes(true).count();
         }
         self.clamp_cursor();
-        self.modified = true;
+        self.touch();
     }
 
     /// Backspace. False si no hay nada que borrar.
@@ -302,7 +312,7 @@ impl Buffer {
             self.cursor = (l - 1, self.line_len(l - 1));
         }
         self.clamp_cursor();
-        self.modified = true;
+        self.touch();
         true
     }
 
@@ -327,7 +337,7 @@ impl Buffer {
             self.rope.remove(start..c1);
         }
         self.clamp_cursor();
-        self.modified = true;
+        self.touch();
         true
     }
 
@@ -342,7 +352,7 @@ impl Buffer {
         };
         self.rope.remove(start..end);
         self.clamp_cursor();
-        self.modified = true;
+        self.touch();
     }
 
     /// Nueva línea debajo, cursor en ella, modo insert.
@@ -356,7 +366,7 @@ impl Buffer {
         self.snap("insert");
         self.rope.insert(c, "\n");
         self.cursor = (l + 1, 0);
-        self.modified = true;
+        self.touch();
     }
 
     /// Nueva línea encima, cursor en ella, modo insert.
@@ -365,7 +375,47 @@ impl Buffer {
         let c = self.rope.line_to_char(self.cursor.0);
         self.rope.insert(c, "\n");
         self.cursor = (self.cursor.0, 0);
-        self.modified = true;
+        self.touch();
+    }
+
+    // ---------------------------------------------------- LSP positions ----
+    // LSP habla (línea 0-based, columna en UTF-16 code units). UTF-16 NO es
+    // display width (tab=1 unidad, 中=1, emoji SMP=2). Conversión ÚNICA aquí.
+
+    /// unidades UTF-16 de la línea (sin newline).
+    pub fn line_utf16_len(&self, line: usize) -> usize {
+        self.line_text(line)
+            .graphemes(true)
+            .map(|g| g.chars().map(|c| c.len_utf16()).sum::<usize>())
+            .sum()
+    }
+
+    /// (línea, grapheme) -> posición LSP (línea, col UTF-16).
+    pub fn lsp_pos_of(&self, line: usize, g: usize) -> (u32, u32) {
+        let col: usize = self
+            .line_text(line)
+            .graphemes(true)
+            .take(g)
+            .map(|gr| gr.chars().map(|c| c.len_utf16()).sum::<usize>())
+            .sum();
+        (line as u32, col as u32)
+    }
+
+    /// posición LSP -> (línea, grapheme), clamp a lo existente. Una col que
+    /// cae dentro de un grafo (mid-surrogate, mid-ZWJ) resuelve al inicio
+    /// del grafo que la contiene.
+    pub fn pos_of_lsp(&mut self, line: u32, utf16_col: u32) -> (usize, usize) {
+        let line = (line as usize).min(self.len_lines().saturating_sub(1));
+        let text = self.line_text(line);
+        let mut acc = 0usize;
+        for (gi, gr) in text.graphemes(true).enumerate() {
+            let w: usize = gr.chars().map(|c| c.len_utf16()).sum();
+            if acc + w > utf16_col as usize {
+                return (line, gi);
+            }
+            acc += w;
+        }
+        (line, text.graphemes(true).count())
     }
 
     pub fn undo(&mut self) {
@@ -374,7 +424,7 @@ impl Buffer {
             self.rope = rope;
             self.cursor = cursor;
             self.clamp_cursor();
-            self.modified = true;
+            self.touch();
             self.last_stroke = None;
         }
     }
@@ -385,7 +435,7 @@ impl Buffer {
             self.rope = rope;
             self.cursor = cursor;
             self.clamp_cursor();
-            self.modified = true;
+            self.touch();
             self.last_stroke = None;
         }
     }
@@ -405,5 +455,101 @@ impl Buffer {
             .map_err(|e| e.to_string())?;
         self.modified = false;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ropey::Rope;
+
+    fn buf(text: &str) -> Buffer {
+        Buffer {
+            path: None,
+            rope: Rope::from_str(text),
+            cursor: (0, 0),
+            modified: false,
+            rev: 0,
+            untitled: true,
+            undo: Undo::default(),
+            last_stroke: None,
+        }
+    }
+
+    #[test]
+    fn tab_es_1_unidad_no_4() {
+        let mut b = buf("\tfoo\n");
+        assert_eq!(b.line_utf16_len(0), 4);
+        // grapheme 1 (f) = col 1 aunque display = 4
+        assert_eq!(b.lsp_pos_of(0, 1), (0, 1));
+        assert_eq!(b.pos_of_lsp(0, 1), (0, 1));
+        assert_eq!(b.pos_of_lsp(0, 3), (0, 3));
+    }
+
+    #[test]
+    fn emoji_smp_2_unidades() {
+        let mut b = buf("e\u{1F600}g\n"); // 😀
+        assert_eq!(b.line_utf16_len(0), 4);
+        assert_eq!(b.lsp_pos_of(0, 0), (0, 0));
+        assert_eq!(b.lsp_pos_of(0, 1), (0, 1));
+        assert_eq!(b.lsp_pos_of(0, 2), (0, 3), "emoji = 2 unidades");
+        assert_eq!(b.lsp_pos_of(0, 3), (0, 4));
+        // col en medio del surrogate pair clampa al grafo que lo contiene
+        assert_eq!(b.pos_of_lsp(0, 2), (0, 1));
+        assert_eq!(b.pos_of_lsp(0, 3), (0, 2));
+    }
+
+    #[test]
+    fn familia_zwj_1_grapheme_8_unidades() {
+        // 👨‍👩‍👧: 1 grafo, 4 BMP + 1 emoji extra... exactamente 8 unidades
+        let mut b = buf("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\n");
+        assert_eq!(b.line_utf16_len(0), 8);
+        assert_eq!(b.line_len(0), 1);
+        // col 3 cae dentro del grafo -> grafo 0
+        assert_eq!(b.pos_of_lsp(0, 3), (0, 0));
+        assert_eq!(b.pos_of_lsp(0, 8), (0, 1), "eol = grafo tras el clan");
+        assert_eq!(b.lsp_pos_of(0, 1), (0, 8));
+    }
+
+    #[test]
+    fn combining_1_grapheme_2_unidades() {
+        let mut b = buf("e\u{301}f\n"); // é combinante
+        assert_eq!(b.line_utf16_len(0), 3);
+        assert_eq!(b.line_len(0), 2);
+        assert_eq!(b.pos_of_lsp(0, 1), (0, 0), "col dentro de é -> grafo 0");
+        assert_eq!(b.pos_of_lsp(0, 2), (0, 1));
+    }
+
+    #[test]
+    fn cjk_1_unidad_por_char() {
+        let mut b = buf("中文\n");
+        assert_eq!(b.line_utf16_len(0), 2);
+        assert_eq!(b.lsp_pos_of(0, 2), (0, 2));
+        assert_eq!(b.pos_of_lsp(0, 2), (0, 2));
+    }
+
+    #[test]
+    fn crlf_roundtrip() {
+        let mut b = buf("uno\r\ndos\r\n");
+        // ropey conservará \r\n; line_text los strippea
+        let (l, c) = b.pos_of_lsp(1, 3); // fin de "dos" (col 3 = eol)
+        assert_eq!((l, c), (1, 3));
+        assert_eq!(b.lsp_pos_of(l, c), (1, 3));
+        b.to(l, c);
+        assert_eq!(b.lsp_pos_of(b.cursor.0, b.cursor.1), (1, 3));
+    }
+
+    #[test]
+    fn roundtrip_y_clamps() {
+        let mut b = buf("a\r\n\tf\u{1F600}中文\n");
+        for l in 0..b.len_lines() {
+            for g in 0..=b.line_len(l) {
+                let (ll, col) = b.lsp_pos_of(l, g);
+                assert_eq!(b.pos_of_lsp(ll, col), (l, g), "roundtrip l{l} g{g}");
+            }
+        }
+        // fuera de rango clampa
+        assert_eq!(b.pos_of_lsp(99, 99), (b.len_lines() - 1, b.line_len(b.len_lines() - 1)));
+        assert_eq!(b.lsp_pos_of(0, 999).1 as usize, b.line_utf16_len(0));
     }
 }

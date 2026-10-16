@@ -37,6 +37,8 @@ pub enum Action {
     FocusDown,
     FindFile,
     CursorStyleNext,
+    Hover,
+    GotoDef,
 }
 
 pub fn parse(id: &str) -> Option<Action> {
@@ -76,6 +78,8 @@ pub fn parse(id: &str) -> Option<Action> {
         "focus_down" => Action::FocusDown,
         "find_file" => Action::FindFile,
         "cursor_style_next" => Action::CursorStyleNext,
+        "hover" => Action::Hover,
+        "goto_definition" => Action::GotoDef,
         _ => return None,
     };
     Some(a)

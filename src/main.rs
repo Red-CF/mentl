@@ -50,6 +50,11 @@ fn run(
             need_draw = true;
         }
 
+        // eventos LSP: diagnósticos/respuestas → on_lsp, con draw si toca
+        if app.on_lsp() {
+            need_draw = true;
+        }
+
         // timeouts de chord / decay de mensajes
         need_draw |= app.tick();
 

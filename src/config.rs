@@ -60,8 +60,9 @@ impl Default for Keys {
             ("leader v", "split_vertical"), ("leader s", "split_horizontal"),
             ("leader x", "close_pane"),
             ("leader h", "focus_left"), ("leader l", "focus_right"),
-            ("leader k", "focus_up"), ("leader j", "focus_down"),
+            ("leader K", "focus_up"), ("leader j", "focus_down"),
             ("leader f", "find_file"), ("leader c", "cursor_style_next"),
+            ("leader k", "hover"), ("leader g", "goto_definition"),
         ]
         .into_iter()
         .map(|(k, v)| (k.into(), v.into()))
@@ -90,17 +91,65 @@ pub struct ThemeConfig {
     pub status_insert_bg: Option<String>,
     pub match_bg: Option<String>,
     pub cursor_fg: Option<String>,
+    pub diag_error: Option<String>,
+    pub diag_warn: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ServerCfg {
+    pub command: Vec<String>,
+}
+impl Default for ServerCfg {
+    fn default() -> Self {
+        Self { command: Vec::new() }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
-#[derive(Default)]
+pub struct LspCfg {
+    pub enabled: bool,
+    pub debounce_ms: u64,
+    pub rust: Option<ServerCfg>,
+    pub java: Option<ServerCfg>,
+}
+impl Default for LspCfg {
+    fn default() -> Self {
+        Self { enabled: true, debounce_ms: 300, rust: None, java: None }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub editor: Editor,
     pub keys: Keys,
     pub theme: ThemeConfig,
+    pub lsp: LspCfg,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            editor: Editor::default(),
+            keys: Keys::default(),
+            theme: ThemeConfig::default(),
+            lsp: LspCfg::default(),
+        }
+    }
+}
+
+
+impl Config {
+    pub fn lsp_server(&self, lang: &str) -> Option<&ServerCfg> {
+        match lang {
+            "rust" => self.lsp.rust.as_ref(),
+            "java" => self.lsp.java.as_ref(),
+            _ => None,
+        }
+    }
+}
 
 /// Ok(config) si se cargó/es default; Err(msg) si el TOML está roto (caller
 /// mantiene la config anterior y muestra el error).

@@ -8,6 +8,7 @@ pub mod draw;
 pub mod finder;
 pub mod input;
 pub mod keymap;
+pub mod lsp;
 pub mod panes;
 pub mod statusline;
 pub mod theme;

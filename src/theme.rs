@@ -40,6 +40,8 @@ pub struct Theme {
     pub status_insert_bg: Color,
     pub match_bg: Color,
     pub cursor_fg: Color,
+    pub diag_error: Color,
+    pub diag_warn: Color,
 }
 
 fn hex(s: &str) -> Option<Color> {
@@ -66,6 +68,8 @@ impl Theme {
             status_insert_bg: pick(&cfg.status_insert_bg, Color::Rgb(0x2a, 0x31, 0x46)),
             match_bg: pick(&cfg.match_bg, Color::Rgb(0x4f, 0xc4, 0x9c)),
             cursor_fg: pick(&cfg.cursor_fg, Color::Rgb(0x1a, 0x1b, 0x26)),
+            diag_error: pick(&cfg.diag_error, Color::Rgb(0xf7, 0x76, 0x8e)),
+            diag_warn: pick(&cfg.diag_warn, Color::Rgb(0xe0, 0xaf, 0x78)),
         }
     }
 }
