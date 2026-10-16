@@ -33,8 +33,6 @@ pub struct App {
     pub buffers: Vec<Option<Buffer>>,
     pub panes: Panes,
     pub finder: Option<Finder>,
-    /// rect del área completa de editor (lo pone el draw)
-    pub last_area: ratatui::layout::Rect,
     /// rect del área EDITOR (sidebar/tabs/panel fuera) para panes/focus/popups
     pub last_editor_rect: ratatui::layout::Rect,
     pub cursor_style: CursorStyle,
@@ -107,12 +105,6 @@ pub struct AiJob {
     pub marker: (usize, usize), // línea, grapheme del "… thinking …"
 }
 
-#[derive(Clone, Copy)]
-pub enum WaitKind {
-    Hover,
-    Def,
-    Completion,
-}
 
 impl App {
     pub fn new(arg: Option<std::path::PathBuf>) -> Self {
@@ -175,7 +167,6 @@ impl App {
                     arg_ref.as_ref().filter(|p| p.is_file()).and_then(|p| p.parent().map(|d| d.to_path_buf()))
                 })
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
-            last_area: Rect::new(0, 0, 80, 24),
             last_editor_rect: Rect::new(0, 0, 80, 24),
             cursor_style: CursorStyle::parse(&config.editor.cursor_normal),
             cursor_style_dirty: true,
@@ -495,31 +486,15 @@ impl App {
                 }
                 LspEvent::Diagnostics { uri, diags } => {
                     if let Some(path) = lsp::types::uri_to_path(&uri) {
-                        // UNA búsqueda del buffer por publish (no una por diag)
-                        let slot = self
-                            .buffers
-                            .iter_mut()
-                            .flatten()
-                            .find(|b| same_path(b.path.as_ref(), Some(&path)));
-                        let converted: Vec<Diag> = match slot {
-                            Some(b) => diags
-                                .into_iter()
-                                .map(|d| {
-                                    let (line, col) = b.pos_of_lsp(d.line, d.character);
-                                    Diag { line, col, col_u16: d.character, severity: d.severity, msg: d.msg }
-                                })
-                                .collect(),
-                            None => diags
-                                .into_iter()
-                                .map(|d| Diag {
-                                    line: d.line as usize,
-                                    col: d.character as usize,
-                                    col_u16: d.character,
-                                    severity: d.severity,
-                                    msg: d.msg,
-                                })
-                                .collect(),
-                        };
+                        let converted: Vec<Diag> = diags
+                            .into_iter()
+                            .map(|d| Diag {
+                                line: d.line as usize,
+                                col_u16: d.character,
+                                severity: d.severity,
+                                msg: d.msg,
+                            })
+                            .collect();
                         self.diagnostics.insert(path, converted);
                         need = true;
                     }

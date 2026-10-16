@@ -52,7 +52,6 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
         width: area.width - sidebar_w,
         height: pane_h,
     };
-    app.last_area = area;
     app.last_editor_rect = editor;
     app.last_view_h = pane_h as usize;
     app.follow_cursor();

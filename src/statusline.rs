@@ -1,7 +1,7 @@
 //! Spans del statusline: chip de modo, nombre, msg/prompt de búsqueda,
 //! posición a la derecha.
 
-use ratatui::style::{Color as C, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
@@ -83,7 +83,3 @@ pub fn build(app: &mut App, width: usize) -> Line<'static> {
     Line::from(spans).style(Style::new().bg(t.status_bg))
 }
 
-/// Color de fondo usado por todo el statusline (para un rect de fondo).
-pub fn bg(app: &App) -> C {
-    app.theme.status_bg
-}

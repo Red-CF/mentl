@@ -74,15 +74,6 @@ pub fn parse_in(body: &str) -> InMsg {
     }
 }
 
-impl InMsg {
-    pub fn method(&self) -> Option<&str> {
-        match self {
-            InMsg::Request { method, .. } | InMsg::Notification { method, .. } => Some(method),
-            _ => None,
-        }
-    }
-}
-
 // ------------------------------------------------------------ LSP ligero ---
 
 #[derive(Debug, Clone, Deserialize)]

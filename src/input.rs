@@ -1,7 +1,7 @@
 //! Normalización de input: crossterm event -> InputKey, y parseo del formato
 //! TOML ("C-r", "Esc", "g g" — espacio separa secuencia).
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct InputKey {
@@ -25,14 +25,6 @@ impl InputKey {
             ctrl: ev.modifiers.contains(KeyModifiers::CONTROL),
             alt: ev.modifiers.contains(KeyModifiers::ALT),
         })
-    }
-
-    /// De un evento crossterm genérico solo nos interesan las teclas.
-    pub fn from_event_any(ev: &Event) -> Option<Self> {
-        match ev {
-            Event::Key(k) => Self::from_event(*k),
-            _ => None,
-        }
     }
 
     /// Parsea un token del TOML. Las mayúsculas llevan su propio case

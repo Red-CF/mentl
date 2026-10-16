@@ -112,7 +112,7 @@ impl Sidebar {
             if let Some(parent) = row.path.parent() {
                 if let Some(i) = self.rows.iter().position(|r| r.path == parent) {
                     self.cursor = i;
-                    self.clamp();
+                    self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
                 }
             }
         }
@@ -121,19 +121,9 @@ impl Sidebar {
     pub fn move_cursor(&mut self, d: isize) {
         let c = self.cursor as isize + d;
         self.cursor = c.clamp(0, self.rows.len().saturating_sub(1) as isize) as usize;
-        self.clamp();
+        self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
     }
 
-    pub fn clamp(&mut self) {
-        if self.rows.is_empty() {
-            self.cursor = 0;
-            self.scroll = 0;
-            return;
-        }
-        self.cursor = self.cursor.min(self.rows.len() - 1);
-        self.scroll = self.scroll.min(self.cursor);
-        self.scroll = self.scroll.max(self.cursor.saturating_sub(99999));
-    }
 }
 
 /// Sincroniza scroll con cursor para un viewport de `h` filas.

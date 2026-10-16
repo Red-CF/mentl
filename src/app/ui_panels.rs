@@ -9,7 +9,6 @@ use crate::lsp;
 use crate::buffer::Buffer;
 use crate::input::InputKey;
 use crate::keymap::Mode;
-use crate::explorer;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crossterm::event::KeyCode as K;
