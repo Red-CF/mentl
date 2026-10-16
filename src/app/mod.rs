@@ -1013,12 +1013,19 @@ impl App {
             Hover => self.lsp_request_at_cursor(HoverOrDef::Hover),
             GotoDef => self.lsp_request_at_cursor(HoverOrDef::Def),
             ToggleExplorer => {
-                if self.sidebar.is_some() {
-                    self.sidebar = None;
-                    self.sidebar_focus = false;
-                } else {
-                    self.sidebar = Some(crate::explorer::Sidebar::new(self.project_root.clone()));
-                    self.sidebar_focus = true;
+                match self.sidebar.as_ref() {
+                    // cerrada -> abrir enfocada
+                    None => {
+                        self.sidebar = Some(crate::explorer::Sidebar::new(self.project_root.clone()));
+                        self.sidebar_focus = true;
+                    }
+                    // abierta sin foco -> foco (no la cierro: la cerraste sin querer una vez y duele)
+                    Some(_) if !self.sidebar_focus => self.sidebar_focus = true,
+                    // abierta y enfocada -> cerrar
+                    Some(_) => {
+                        self.sidebar = None;
+                        self.sidebar_focus = false;
+                    }
                 }
             }
             TabNext => self.cycle_tab(true),
