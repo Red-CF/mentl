@@ -99,6 +99,7 @@ pub struct ThemeConfig {
     pub cursor_fg: Option<String>,
     pub diag_error: Option<String>,
     pub diag_warn: Option<String>,
+    pub sidebar_bg: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -161,6 +162,18 @@ impl Default for AiCfg {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+pub struct WelcomeCfg {
+    pub anim: bool,
+    pub anim_ms: u64,
+}
+impl Default for WelcomeCfg {
+    fn default() -> Self {
+        Self { anim: true, anim_ms: 150 }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub editor: Editor,
     pub keys: Keys,
@@ -168,6 +181,7 @@ pub struct Config {
     pub lsp: LspCfg,
     pub ui: UiCfg,
     pub ai: AiCfg,
+    pub welcome: WelcomeCfg,
 }
 
 impl Default for Config {
@@ -179,6 +193,7 @@ impl Default for Config {
             lsp: LspCfg::default(),
             ui: UiCfg::default(),
             ai: AiCfg::default(),
+            welcome: WelcomeCfg::default(),
         }
     }
 }

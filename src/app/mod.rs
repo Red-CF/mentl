@@ -20,7 +20,6 @@ use crate::view::Geometry;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     Welcome,
-    Picker,
     Editor,
 }
 
@@ -49,9 +48,6 @@ pub struct App {
     pub msg: Option<(String, Instant)>,
     pub quit_pending: bool,
     pub quit: bool,
-    pub picker: Vec<std::path::PathBuf>,
-    pub picker_cursor: usize,
-    pub picker_scroll: usize,
     pub config_error: Option<String>,
     /// altura del viewport de editor conocida en el último draw (24 default)
     pub last_view_h: usize,
@@ -77,6 +73,11 @@ pub struct App {
     pub completion_wait: Option<(u64, PathBuf, u64, Instant)>,
     pub ai_ctx: Option<String>,
     pub ai_jobs: Vec<AiJob>,
+    // welcome hub
+    pub welcome_cursor: usize,
+    pub welcome_input: Option<String>,
+    pub anim_frame: u8,
+    pub anim_last: Instant,
 }
 
 pub struct CompletionPopup {
@@ -112,21 +113,13 @@ impl App {
         let arg_dir = arg_ref.as_ref().filter(|p| p.is_dir()).cloned();
         let screen;
         let mut buffers = Vec::new();
-        let mut picker = Vec::new();
+        let no_arg = arg.is_none();
+        let arg_is_dir = arg.as_ref().is_some_and(|p| p.is_dir());
         let mut msg = None;
         match arg {
             None => screen = Screen::Welcome,
-            Some(p) if p.is_dir() => {
-                let mut entries: Vec<_> = std::fs::read_dir(&p)
-                    .map(|rd| {
-                        rd.filter_map(|e| e.ok())
-                            .map(|e| e.path())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                entries.sort();
-                picker = entries;
-                screen = Screen::Picker;
+            Some(_) if arg_is_dir => {
+                screen = Screen::Editor;
             }
             Some(p) => match Buffer::open(&p) {
                 Ok(b) => {
@@ -181,9 +174,6 @@ impl App {
             msg,
             quit_pending: false,
             quit: false,
-            picker,
-            picker_cursor: 0,
-            picker_scroll: 0,
             config_error,
             last_view_h: 24,
             lsp: lsp::LspHub::default(),
@@ -202,7 +192,17 @@ impl App {
             completion_wait: None,
             ai_ctx: None,
             ai_jobs: Vec::new(),
+            welcome_cursor: 0,
+            welcome_input: None,
+            anim_frame: 0,
+            anim_last: Instant::now(),
         };
+        // proyecto real (dir arg o sin args) => árbol abierto
+        if no_arg || arg_is_dir {
+            let root = app.project_root.clone();
+            app.sidebar = Some(crate::explorer::Sidebar::new(root));
+        }
+
         // arranca client si el buffer inicial es de un lenguaje LSP
         if app.screen == Screen::Editor {
             let p = app.buffer().path.clone();
@@ -361,6 +361,15 @@ impl App {
         self.lsp_sync_tick();
         self.completion_tick();
         changed |= self.ai_tick();
+        // animación del welcome (frame cycling, dibujo barato)
+        if self.screen == Screen::Welcome && self.config.welcome.anim {
+            let ms = std::time::Duration::from_millis(self.config.welcome.anim_ms);
+            if self.anim_last.elapsed() >= ms {
+                self.anim_frame = self.anim_frame.wrapping_add(1);
+                self.anim_last = Instant::now();
+                changed = true;
+            }
+        }
         changed
     }
 
@@ -667,16 +676,7 @@ impl App {
             }
         }
         if self.screen == Screen::Welcome {
-            match k.code {
-                crossterm::event::KeyCode::Char('q') | crossterm::event::KeyCode::Esc => {
-                    self.quit = true;
-                }
-                _ => {}
-            }
-            return;
-        }
-        if self.screen == Screen::Picker {
-            self.picker_key(k);
+            self.welcome_key(k);
             return;
         }
         if self.sidebar_focus {
@@ -733,27 +733,91 @@ impl App {
         self.follow_cursor();
     }
 
-    fn picker_key(&mut self, k: InputKey) {
+    // ------------------------------------------------------------- welcome --
+
+    const MENU: [&str; 4] = ["abrir proyecto (cwd)", "buscar archivo", "abrir ruta…", "solo AI"];
+
+    fn welcome_key(&mut self, k: InputKey) {
         use crossterm::event::KeyCode as K;
-        match k.code {
-            K::Char('j') | K::Down => {
-                self.picker_cursor = (self.picker_cursor + 1).min(self.picker.len().saturating_sub(1));
-            }
-            K::Char('k') | K::Up => {
-                self.picker_cursor = self.picker_cursor.saturating_sub(1);
-            }
-            K::Enter => {
-                if let Some(p) = self.picker.get(self.picker_cursor) {
-                    let p = p.clone();
-                    match self.open_in_pane(&p) {
-                        Ok(()) => self.screen = Screen::Editor,
-                        Err(e) => self.status_msg(e),
-                    }
+        // input de ruta activo
+        if let Some(inp) = self.welcome_input.as_mut() {
+            match k.code {
+                K::Enter => {
+                    let raw = inp.clone();
+                    self.welcome_input = None;
+                    self.welcome_open_path(&raw);
                 }
+                K::Esc => self.welcome_input = None,
+                K::Backspace => {
+                    inp.pop();
+                }
+                K::Char(c) => inp.push(c),
+                _ => {}
             }
-            K::Char('q') | K::Esc => self.quit = true,
+            return;
+        }
+        let n = Self::MENU.len();
+        match k.code {
+            K::Char('j') | K::Down => self.welcome_cursor = (self.welcome_cursor + 1) % n,
+            K::Char('k') | K::Up => self.welcome_cursor = (self.welcome_cursor + n - 1) % n,
+            K::Enter => self.welcome_execute(),
+            K::Esc | K::Char('q') => self.quit = true,
             _ => {}
         }
+    }
+
+    fn welcome_execute(&mut self) {
+        match self.welcome_cursor {
+            0 => {
+                // abrir proyecto cwd
+                self.screen = Screen::Editor;
+                let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                self.project_root = root.clone();
+                self.sidebar = Some(crate::explorer::Sidebar::new(root));
+            }
+            1 => {
+                self.screen = Screen::Editor;
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let mut f = Finder::new(&cwd);
+                f.filter();
+                self.finder = Some(f);
+            }
+            2 => {
+                self.welcome_input = Some(String::new());
+            }
+            3 => {
+                self.screen = Screen::Editor;
+                self.pane_zero_empty();
+                self.ai_toggle();
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn welcome_open_path(&mut self, raw: &str) {
+        let raw_p = PathBuf::from(raw.trim());
+        let p = std::fs::canonicalize(&raw_p)
+            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(&raw_p));
+        if p.is_dir() {
+            self.screen = Screen::Editor;
+            self.project_root = p.clone();
+            self.sidebar = Some(crate::explorer::Sidebar::new(p));
+            self.pane_zero_empty();
+            return;
+        }
+        match self.open_in_pane(&p) {
+            Ok(()) => self.screen = Screen::Editor,
+            Err(e) => {
+                self.status_msg(format!("{e}"));
+                self.screen = Screen::Editor;
+            }
+        }
+    }
+
+    /// Garantiza pane activo con buffer vacío (welcome → AI / dir proyectos).
+    fn pane_zero_empty(&mut self) {
+        self.buffers[0] = Some(Buffer::empty(None));
+        self.panes.panes[self.panes.active].buffer = 0;
     }
 
     fn finder_key(&mut self, k: InputKey) {
