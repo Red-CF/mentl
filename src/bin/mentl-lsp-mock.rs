@@ -4,6 +4,16 @@
 
 use std::io::{BufRead, BufReader, Write};
 
+/// Framing LSP reutilizado de la lib — una sola fuente de verdad.
+fn send<W: std::io::Write>(w: &mut W, body: &str) {
+    let frame = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+    let _ = mentl::lsp::transport::write_msg(w, &frame);
+}
+
+fn read_msg<R: BufRead>(r: &mut R) -> Option<String> {
+    mentl::lsp::transport::read_msg(r).ok().flatten()
+}
+
 fn main() {
     let mut inp = BufReader::new(std::io::stdin());
     let mut out = std::io::stdout();
@@ -61,33 +71,6 @@ fn main() {
     }
 }
 
-// ------------------------------------------------------------ framing -----
-
-fn read_msg<R: BufRead>(r: &mut R) -> Option<String> {
-    let mut len: Option<usize> = None;
-    loop {
-        let mut line = String::new();
-        r.read_line(&mut line).ok()?;
-        if line.is_empty() {
-            return None;
-        }
-        if line.trim().is_empty() {
-            break;
-        }
-        if let Some(v) = line.trim().strip_prefix("Content-Length:") {
-            len = v.trim().parse().ok();
-        }
-    }
-    let n = len?;
-    let mut buf = vec![0u8; n];
-    r.read_exact(&mut buf).ok()?;
-    String::from_utf8(buf).ok()
-}
-
-fn send<W: Write>(w: &mut W, body: &str) {
-    let _ = write!(w, "Content-Length: {}\r\n\r\n{}", body.len(), body);
-    let _ = w.flush();
-}
 
 fn reply<W: Write>(w: &mut W, id: &serde_json::Value, result: serde_json::Value) {
     send(w, &serde_json::json!({"jsonrpc":"2.0","id":id,"result":result}).to_string());

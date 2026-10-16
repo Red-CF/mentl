@@ -28,6 +28,8 @@ fn main() {
     let mut watcher = watch::Watcher::new(&cfg_path);
 
     let res = run(&mut terminal, &mut app, &mut watcher, &cfg_path);
+    // shutdown best-effort de servers LSP antes de restaurar el terminal
+    app.lsp_shutdown();
     ratatui::restore();
     if let Err(e) = res {
         eprintln!("mentl: {e}");

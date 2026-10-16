@@ -166,22 +166,28 @@ impl App {
     }
 
     pub fn open_in_pane(&mut self, path: &std::path::Path) -> Result<(), String> {
-        // didClose del buffer que sale, si era archivo
-        let old_path = { self.buffer().path.clone() };
-        if let Some(old) = &old_path {
-            let lang = self.lsp.language_of(old);
-            if let Some(lang) = lang {
-                let uri = lsp::types::path_to_uri(old);
-                self.lsp.notify(lang, "textDocument/didClose", serde_json::json!({
-                    "textDocument": {"uri": uri}
-                }));
-                self.diagnostics.remove(old);
-                self.sync_state.remove(old);
-            }
-        }
+        // abrir PRIMERO: si falla, no tocamos el server (sin didClose falso)
         let b = Buffer::open(path)?;
+        let old_path = self.buffer().path.clone();
         let idx = self.active_buffer();
         self.buffers[idx] = b;
+        // didClose solo si NINGÚN otro buffer sigue mostrando ese path
+        if let Some(old) = &old_path {
+            let still_open = self
+                .buffers
+                .iter()
+                .any(|bb| same_path(bb.path.as_ref(), Some(old)));
+            if !still_open {
+                if let Some(lang) = self.lsp.language_of(old) {
+                    let uri = lsp::types::path_to_uri(old);
+                    self.lsp.notify(lang, "textDocument/didClose", serde_json::json!({
+                        "textDocument": {"uri": uri}
+                    }));
+                    self.diagnostics.remove(old);
+                    self.sync_state.remove(old);
+                }
+            }
+        }
         let new_path = self.buffer().path.clone();
         if let Some(p) = new_path {
             // arranca/asegura client para este lenguaje y manda didOpen
@@ -323,15 +329,18 @@ impl App {
                 }
                 LspEvent::Diagnostics { uri, diags } => {
                     if let Some(path) = lsp::types::uri_to_path(&uri) {
+                        // UNA búsqueda del buffer por publish (no una por diag)
+                        let buf_slot: Option<usize> = self
+                            .buffers
+                            .iter()
+                            .position(|b| same_path(b.path.as_ref(), Some(&path)));
                         let converted: Vec<Diag> = diags
                             .into_iter()
                             .map(|d| {
-                                // convierte UTF-16 -> graphemes SI el buffer está abierto
-                                let (line, col) =
-                                    match self.buffers.iter_mut().find(|b| same_path(b.path.as_ref(), Some(&path))) {
-                                        Some(b) => b.pos_of_lsp(d.line, d.character),
-                                        None => (d.line as usize, d.character as usize),
-                                    };
+                                let (line, col) = match buf_slot {
+                                    Some(i) => self.buffers[i].pos_of_lsp(d.line, d.character),
+                                    None => (d.line as usize, d.character as usize),
+                                };
                                 Diag { line, col, severity: d.severity, msg: d.msg }
                             })
                             .collect();

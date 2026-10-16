@@ -163,16 +163,7 @@ fn client_loop(
             }
         }
         if shutdown {
-            let _ = transport_write(&mut out, &OutMsg::Request {
-                id: next_id,
-                method: "shutdown".into(),
-                params: json!(null),
-            });
-            let _ = transport_write(&mut out, &OutMsg::Notification {
-                method: "exit".into(),
-                params: json!(null),
-            });
-            let _ = child.wait();
+            shutdown_exit(&mut child, &mut out, &mut next_id);
             return;
         }
 
@@ -221,16 +212,7 @@ fn client_loop(
                         let _ = transport_write(&mut out, &OutMsg::Notification { method, params });
                     }
                     Ok(Cmd::Shutdown) => {
-                        let _ = transport_write(&mut out, &OutMsg::Request {
-                            id: next_id,
-                            method: "shutdown".into(),
-                            params: json!(null),
-                        });
-                        let _ = transport_write(&mut out, &OutMsg::Notification {
-                            method: "exit".into(),
-                            params: json!(null),
-                        });
-                        let _ = child.wait();
+                        shutdown_exit(&mut child, &mut out, &mut next_id);
                         return;
                     }
                     Err(_) => {} // Empty o Disconnected — sigue el loop
@@ -242,6 +224,21 @@ fn client_loop(
             }
         }
     }
+}
+
+/// Secuencia shutdown+exit+wait — UNA sola fuente (spec LSP).
+fn shutdown_exit(child: &mut Child, out: &mut BufWriter<ChildStdin>, next_id: &mut u64) {
+    let _ = transport_write(out, &OutMsg::Request {
+        id: *next_id,
+        method: "shutdown".into(),
+        params: json!(null),
+    });
+    *next_id += 1;
+    let _ = transport_write(out, &OutMsg::Notification {
+        method: "exit".into(),
+        params: json!(null),
+    });
+    let _ = child.wait();
 }
 
 /// workspace/configuration, client/registerCapability etc: result nulo y

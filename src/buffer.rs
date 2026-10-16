@@ -35,6 +35,15 @@ impl Buffer {
     // ------------------------------------------------------------ apertura --
 
     pub fn open(path: &Path) -> Result<Self, String> {
+        // SIEMPRE absoluta: las claves LSP (uri) y el mapa de diagnósticos
+        // coinciden así; relativo rompe todo el LSP silenciosamente.
+        let path = &std::fs::canonicalize(path).unwrap_or_else(|_| {
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir().unwrap_or_default().join(path)
+            }
+        });
         if !path.exists() {
             return Ok(Self::empty(Some(path.to_path_buf())));
         }
@@ -71,10 +80,13 @@ impl Buffer {
         }
     }
 
-    /// Nombre para statusline.
+    /// Nombre para statusline: solo el archivo (las paths ya son absolutas).
     pub fn display_name(&self) -> String {
         match &self.path {
-            Some(p) => p.display().to_string(),
+            Some(p) => p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.display().to_string()),
             None => "[untitled]".into(),
         }
     }

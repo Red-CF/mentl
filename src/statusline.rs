@@ -25,9 +25,13 @@ pub fn build(app: &mut App, width: usize) -> Line<'static> {
     } else {
         app.live_msg().unwrap_or_default()
     };
+    // centro: solo el nombre (+ [+]) — los chips van como spans aparte
     let name = app.buffer().display_name();
     let modified = if app.buffer().modified { " [+]" } else { "" };
-    // chips de diagnósticos del buffer actual (solo si hay algunos)
+    let name_span = format!(" {name}{modified} ");
+    spans.push(Span::styled(name_span, Style::new().bg(t.status_bg).fg(t.fg)));
+
+    // chips de diagnósticos + estado lsp (spans coloreados aparte)
     let path = app.buffer().path.clone();
     let (nd_err, nd_warn) = path
         .as_ref()
@@ -43,16 +47,12 @@ pub fn build(app: &mut App, width: usize) -> Line<'static> {
         (0, w) => format!("W{w}"),
         (e, w) => format!("E{e} W{w}"),
     };
-    // chip de servidor lsp arrancando (jdtls tarda 10-60s — señal obligatoria)
     let lang = path.as_ref().and_then(|p| app.lsp.language_of(p));
     let lsp_chip = match lang {
         Some(l) if app.lsp.is_ready(l) => String::new(),
-        Some(l) if app.lsp.ready(l).is_some() => format!(" lsp:{l} ⋯"),
+        Some(l) if app.lsp.ready(l).is_some() => format!("lsp:{l} ⋯"),
         _ => String::new(),
     };
-    let name_span = format!(" {name}{diag_chip}{lsp_chip}{modified} ");
-    spans.push(Span::styled(name_span, Style::new().bg(t.status_bg).fg(t.fg)));
-
     if !diag_chip.is_empty() {
         let style = if nd_err > 0 {
             Style::new().bg(t.status_bg).fg(t.diag_error)

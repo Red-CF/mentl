@@ -232,7 +232,10 @@ fn draw_hover(f: &mut Frame, area: Rect, app: &mut App) {
         .style(Style::new().bg(t.bg));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    f.render_widget(Paragraph::new(hover.clone()), inner);
+    f.render_widget(
+        Paragraph::new(hover.clone()).wrap(ratatui::widgets::Wrap { trim: false }),
+        inner,
+    );
 }
 
 fn draw_finder(f: &mut Frame, area: Rect, app: &mut App) {

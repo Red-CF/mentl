@@ -60,6 +60,14 @@ impl LspHub {
             return;
         }
         let Some(s) = server else { return };
+        if s.command.is_empty() {
+            // config sin comando — no peta el editor
+            let _ = self.tx.send(LspEvent::StartedFailed {
+                lang,
+                err: "[lsp.x] sin command en el config".into(),
+            });
+            return;
+        }
         let Some(h) = client::spawn(lang, &s.command, self.tx.clone()) else { return };
         let h = ClientHandle { tx: h.tx, lang: h.lang, ready: false };
         self.clients.insert(lang, h);
