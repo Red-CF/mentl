@@ -1,0 +1,101 @@
+//! Config propia: ~/.config/mentl/config.toml. Todo tiene default en código;
+//! el TOML del usuario añade/sobreescribe. TOML roto = error visible, config
+//! anterior se mantiene.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use serde::Deserialize;
+
+pub fn config_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    Path::new(&home)
+        .join(".config")
+        .join("mentl")
+        .join("config.toml")
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Editor {
+    pub tab_width: usize,
+    pub scrolloff: usize,
+    pub chord_timeout_ms: u64,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Self { tab_width: 4, scrolloff: 3, chord_timeout_ms: 500 }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Keys {
+    pub leader: String,
+    pub normal: HashMap<String, String>,
+    pub insert: HashMap<String, String>,
+}
+
+impl Default for Keys {
+    fn default() -> Self {
+        let normal = [
+            ("h", "cursor_left"), ("j", "cursor_down"), ("k", "cursor_up"),
+            ("l", "cursor_right"), ("w", "word_next"), ("b", "word_prev"),
+            ("0", "line_start"), ("$", "line_end"),
+            ("g g", "file_start"), ("G", "file_end"),
+            ("i", "insert_mode"), ("I", "insert_line_start"), ("A", "insert_line_end"),
+            ("o", "open_below"), ("O", "open_above"),
+            ("x", "delete_char"), ("d d", "delete_line"),
+            ("u", "undo"), ("C-r", "redo"),
+            ("/", "search_prompt"), ("n", "search_next"), ("N", "search_prev"),
+            ("C-s", "save"), ("leader w", "save"), ("leader q", "quit"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+        let insert = [
+            ("Esc", "normal_mode"),
+            ("Del", "delete_char"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+        Self { leader: " ".into(), normal, insert }
+    }
+}
+
+/// Colores opcionales; hex "#rrggbb". Fallback en theme.rs.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct ThemeConfig {
+    pub fg: Option<String>,
+    pub bg: Option<String>,
+    pub gutter: Option<String>,
+    pub gutter_active: Option<String>,
+    pub accent: Option<String>,
+    pub status_bg: Option<String>,
+    pub status_insert_bg: Option<String>,
+    pub match_bg: Option<String>,
+    pub cursor_fg: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+#[derive(Default)]
+pub struct Config {
+    pub editor: Editor,
+    pub keys: Keys,
+    pub theme: ThemeConfig,
+}
+
+
+/// Ok(config) si se cargó/es default; Err(msg) si el TOML está roto (caller
+/// mantiene la config anterior y muestra el error).
+pub fn load() -> Result<Config, String> {
+    let path = config_path();
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Ok(Config::default()),
+    };
+    toml::from_str(&content).map_err(|e| format!("config inválido: {e}"))
+}

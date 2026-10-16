@@ -1,0 +1,17 @@
+[package]
+name = "mentl"
+version = "0.1.0"
+edition = "2024"
+description = "Editor TUI propio: por defecto como NvChad, configurable 100% con TOML"
+
+[dependencies]
+ratatui = "0.30"        # render + TestBackend
+crossterm = "0.29"
+ropey = "1.6"
+unicode-segmentation = "1.13"
+unicode-width = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+
+[profile.release]
+lto = true
