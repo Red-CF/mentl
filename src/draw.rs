@@ -153,8 +153,8 @@ fn draw_pane(
     let mut rows: Vec<Line> = Vec::new();
     for i in scroll..(scroll + rect.height as usize).min(len) {
         let text = buf.line_text(i);
-        let cursor_byte = if i == cursor.0 && mode == Mode::Normal {
-            Some(Buffer::grapheme_byte_of(&text, cursor.1))
+        let cursor_byte = if i == cursor.0 {
+            Some((Buffer::grapheme_byte_of(&text, cursor.1), mode))
         } else {
             None
         };
@@ -233,19 +233,26 @@ fn draw_finder(f: &mut Frame, area: Rect, app: &mut App) {
 /// Cubre TODA la línea (0..len) — ancla en 0 y len obligatoriamente.
 fn render_line(
     text: &str,
-    cursor_byte: Option<usize>,
+    cursor_byte: Option<(usize, Mode)>,
     matches: &[(usize, usize)],
     t: &crate::theme::Theme,
 ) -> Line<'static> {
     if text.is_empty() {
-        return Line::styled("", Style::new().fg(t.fg));
+        // línea vacía: el cursor sigue visible (celda en blanco con estilo)
+        return match cursor_byte {
+            Some((0, Mode::Normal)) => Line::raw(" ")
+                .style(Style::new().bg(t.accent).fg(t.cursor_fg)),
+            Some((0, Mode::Insert)) => Line::raw(" ")
+                .style(Style::new().underlined().fg(t.fg).underline_color(t.accent)),
+            _ => Line::styled("", Style::new().fg(t.fg)),
+        };
     }
-    let cursor_range = cursor_byte.map(|cb| {
+    let cursor_range = cursor_byte.map(|(cb, m)| {
         let next = text[cb..].graphemes(true).next().map(|g| g.len()).unwrap_or(0);
-        (cb, (cb + next).min(text.len()))
+        (cb, (cb + next).min(text.len()), m)
     });
     let mut marks: Vec<(usize, usize, bool)> = Vec::new();
-    if let Some((s, e)) = cursor_range {
+    if let Some((s, e, _)) = cursor_range {
         marks.push((s, e, true));
     }
     for (s, e) in matches {
@@ -262,15 +269,17 @@ fn render_line(
         if b <= a {
             continue;
         }
-        let is_cursor = cursor_range.is_some_and(|(s, e)| a >= s && a < e);
+        let cursor_mode = cursor_range.filter(|(s, e, _)| a >= *s && a < *e).map(|(_, _, m)| m);
         let is_match = matches.iter().any(|(s, e)| a >= *s && a < *e);
         let piece = text.get(a..b).unwrap_or("").to_string();
-        let style = if is_cursor {
-            Style::new().bg(t.accent).fg(t.cursor_fg)
-        } else if is_match {
-            Style::new().bg(t.match_bg).fg(t.cursor_fg)
-        } else {
-            Style::new().fg(t.fg)
+        let style = match cursor_mode {
+            // NORMAL: bloque sólido; INSERT: underline sobre el char real
+            Some(Mode::Normal) => Style::new().bg(t.accent).fg(t.cursor_fg),
+            Some(Mode::Insert) => {
+                Style::new().underlined().fg(t.fg).underline_color(t.accent)
+            }
+            _ if is_match => Style::new().bg(t.match_bg).fg(t.cursor_fg),
+            _ => Style::new().fg(t.fg),
         };
         spans.push(Span::styled(piece, style));
     }
