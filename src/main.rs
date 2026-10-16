@@ -2,10 +2,12 @@
 
 use std::time::Duration;
 use crossterm::event::{self, Event};
+use crossterm::execute;
 use ratatui::Terminal;
 
 use mentl::app::App;
 use mentl::config;
+use mentl::theme::CursorStyle;
 use mentl::watch;
 
 fn main() {
@@ -54,6 +56,7 @@ fn run(
         if need_draw {
             need_draw = false;
             terminal.draw(|f| mentl::draw::draw(f, app))?;
+            apply_cursor_style(app);
         }
 
         if app.quit {
@@ -78,4 +81,29 @@ fn run(
         }
     }
     Ok(())
+}
+
+/// Cursor geek: estilo del terminal según modo/ciclo (leader c). Ratatui
+/// muestra el cursor en la posición que puso draw; aquí fijamos su forma.
+fn apply_cursor_style(app: &mut App) {
+    if !app.cursor_style_dirty {
+        return;
+    }
+    app.cursor_style_dirty = false;
+    let style = match app.mode {
+        mentl::keymap::Mode::Normal => app.cursor_style,
+        mentl::keymap::Mode::Insert => match app.cursor_style {
+            // en insert bar/underline se mantienen; block pasa a bar:
+            // el cursor friki "se estira" al escribir
+            CursorStyle::Block => CursorStyle::Bar,
+            s => s,
+        },
+    };
+    use crossterm::cursor::SetCursorStyle as S;
+    let shapes = |s: CursorStyle| match s {
+        CursorStyle::Block => S::SteadyBlock,
+        CursorStyle::Bar => S::SteadyBar,
+        CursorStyle::Underline => S::DefaultUserShape,
+    };
+    let _ = execute!(std::io::stdout(), shapes(style));
 }

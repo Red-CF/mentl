@@ -28,6 +28,15 @@ pub enum Action {
     Save,
     Quit,
     NormalMode,
+    SplitVert,
+    SplitHoriz,
+    ClosePane,
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
+    FindFile,
+    CursorStyleNext,
 }
 
 pub fn parse(id: &str) -> Option<Action> {
@@ -58,6 +67,15 @@ pub fn parse(id: &str) -> Option<Action> {
         "save" => Action::Save,
         "quit" => Action::Quit,
         "normal_mode" => Action::NormalMode,
+        "split_vertical" => Action::SplitVert,
+        "split_horizontal" => Action::SplitHoriz,
+        "close_pane" => Action::ClosePane,
+        "focus_left" => Action::FocusLeft,
+        "focus_right" => Action::FocusRight,
+        "focus_up" => Action::FocusUp,
+        "focus_down" => Action::FocusDown,
+        "find_file" => Action::FindFile,
+        "cursor_style_next" => Action::CursorStyleNext,
         _ => return None,
     };
     Some(a)

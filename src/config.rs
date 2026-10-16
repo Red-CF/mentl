@@ -20,11 +20,19 @@ pub struct Editor {
     pub tab_width: usize,
     pub scrolloff: usize,
     pub chord_timeout_ms: u64,
+    pub cursor_normal: String,
+    pub cursor_insert: String,
 }
 
 impl Default for Editor {
     fn default() -> Self {
-        Self { tab_width: 4, scrolloff: 3, chord_timeout_ms: 500 }
+        Self {
+                tab_width: 4,
+                scrolloff: 3,
+                chord_timeout_ms: 500,
+                cursor_normal: "block".into(),
+                cursor_insert: "bar".into(),
+        }
     }
 }
 
@@ -49,6 +57,11 @@ impl Default for Keys {
             ("u", "undo"), ("C-r", "redo"),
             ("/", "search_prompt"), ("n", "search_next"), ("N", "search_prev"),
             ("C-s", "save"), ("leader w", "save"), ("leader q", "quit"),
+            ("leader v", "split_vertical"), ("leader s", "split_horizontal"),
+            ("leader x", "close_pane"),
+            ("leader h", "focus_left"), ("leader l", "focus_right"),
+            ("leader k", "focus_up"), ("leader j", "focus_down"),
+            ("leader f", "find_file"), ("leader c", "cursor_style_next"),
         ]
         .into_iter()
         .map(|(k, v)| (k.into(), v.into()))

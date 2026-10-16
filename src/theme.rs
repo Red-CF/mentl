@@ -3,6 +3,32 @@
 use ratatui::style::Color;
 use crate::config::ThemeConfig;
 
+/// Estilo de cursor geek: block / bar / underline (cicla con leader c).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CursorStyle {
+    Block,
+    Bar,
+    Underline,
+}
+
+impl CursorStyle {
+    pub fn parse(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "bar" => Self::Bar,
+            "underline" => Self::Underline,
+            _ => Self::Block,
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Block => Self::Bar,
+            Self::Bar => Self::Underline,
+            Self::Underline => Self::Block,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub fg: Color,

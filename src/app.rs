@@ -6,10 +6,13 @@ use std::time::Instant;
 use crate::action::Action;
 use crate::buffer::Buffer;
 use crate::config::{self, Config};
+use crate::finder::Finder;
 use crate::input::InputKey;
 use crate::keymap::{Mode, KeyMap, Match};
-use crate::theme::Theme;
-use crate::view::{View, Geometry};
+use crate::panes::{Dir, Focus, Panes};
+use crate::theme::{CursorStyle, Theme};
+use ratatui::layout::Rect;
+use crate::view::Geometry;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
@@ -22,8 +25,12 @@ pub struct App {
     pub screen: Screen,
     pub mode: Mode,
     pub buffers: Vec<Buffer>,
-    pub active: usize,
-    pub view: View,
+    pub panes: Panes,
+    pub finder: Option<Finder>,
+    /// rect del área completa de editor (lo pone el draw)
+    pub last_area: ratatui::layout::Rect,
+    pub cursor_style: CursorStyle,
+    pub cursor_style_dirty: bool,
     pub config: Config,
     pub theme: Theme,
     pub keymap: KeyMap,
@@ -95,8 +102,11 @@ impl App {
             screen,
             mode: Mode::Normal,
             buffers,
-            active: 0,
-            view: View::default(),
+            panes: Panes::first(0),
+            finder: None,
+            last_area: Rect::new(0, 0, 80, 24),
+            cursor_style: CursorStyle::parse(&config.editor.cursor_normal),
+            cursor_style_dirty: true,
             config,
             theme,
             keymap,
@@ -116,8 +126,21 @@ impl App {
         }
     }
 
+    /// Índice del buffer del pane activo.
+    pub fn active_buffer(&self) -> usize {
+        self.panes.buffer_of(self.panes.active)
+    }
+
     pub fn buffer(&mut self) -> &mut Buffer {
-        &mut self.buffers[self.active]
+        let idx = self.active_buffer();
+        &mut self.buffers[idx]
+    }
+
+    pub fn open_in_pane(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let b = Buffer::open(path)?;
+        let idx = self.active_buffer();
+        self.buffers[idx] = b;
+        Ok(())
     }
 
     pub fn status_msg(&mut self, s: impl Into<String>) {
@@ -181,7 +204,15 @@ impl App {
     pub fn follow_cursor(&mut self) {
         let (l, _) = self.buffer().cursor;
         let geo = self.geo();
-        self.view.ensure_visible(l, &geo);
+        self.panes.panes[self.panes.active].view.ensure_visible(l, &geo);
+    }
+
+    /// Rects por pane (con last_area).
+    pub fn pane_rects(&self) -> Vec<(usize, Rect)> {
+        let mut out = Vec::new();
+        let mut seps = Vec::new();
+        self.panes.layout(self.last_area, &mut out, &mut seps);
+        out
     }
 
     // --------------------------------------------------------------- keys ---
@@ -202,6 +233,10 @@ impl App {
         }
         if self.search_prompt {
             self.search_key(k);
+            return;
+        }
+        if self.finder.is_some() {
+            self.finder_key(k);
             return;
         }
         // chord timeout
@@ -241,17 +276,26 @@ impl App {
             K::Enter => {
                 if let Some(p) = self.picker.get(self.picker_cursor) {
                     let p = p.clone();
-                    match Buffer::open(&p) {
-                        Ok(b) => {
-                            self.buffers[self.active] = b;
-                            self.screen = Screen::Editor;
-                        }
+                    match self.open_in_pane(&p) {
+                        Ok(()) => self.screen = Screen::Editor,
                         Err(e) => self.status_msg(e),
                     }
                 }
             }
             K::Char('q') | K::Esc => self.quit = true,
             _ => {}
+        }
+    }
+
+    fn finder_key(&mut self, k: InputKey) {
+        let pick = self.finder.as_mut().map(|f| f.key(k)).unwrap_or(None);
+        if let Some(p) = pick {
+            if let Err(e) = self.open_in_pane(&p) {
+                self.status_msg(e);
+            }
+            self.finder = None;
+        } else if k.code == crossterm::event::KeyCode::Esc {
+            self.finder = None;
         }
     }
 
@@ -319,7 +363,10 @@ impl App {
             LineEnd => self.buffer().line_end(),
             FileStart => self.buffer().file_start(),
             FileEnd => self.buffer().file_end(),
-            InsertMode => self.mode = Mode::Insert,
+            InsertMode => {
+                self.mode = Mode::Insert;
+                self.cursor_style_dirty = true;
+            }
             InsertLineStart => {
                 self.mode = Mode::Insert;
                 self.buffer().line_start();
@@ -365,9 +412,65 @@ impl App {
                     self.status_msg("cambios sin guardar — pulsa quit otra vez");
                 }
             }
-            NormalMode => self.mode = Mode::Normal,
+            NormalMode => {
+                self.mode = Mode::Normal;
+                self.cursor_style_dirty = true;
+            }
+            SplitVert => self.panes.split(Dir::Vert),
+            SplitHoriz => self.panes.split(Dir::Horiz),
+            ClosePane => {
+                if self.panes.close().is_none() {
+                    self.status_msg("último pane — usa salir");
+                }
+            }
+            FocusLeft => self.focus(Focus::Left),
+            FocusRight => self.focus(Focus::Right),
+            FocusUp => self.focus(Focus::Up),
+            FocusDown => self.focus(Focus::Down),
+            FindFile => {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let mut f = Finder::new(&cwd);
+                f.filter();
+                self.finder = Some(f);
+            }
+            CursorStyleNext => {
+                self.cursor_style = self.cursor_style.next();
+                self.cursor_style_dirty = true;
+            }
         }
         self.follow_cursor();
+    }
+
+    /// Foco al pane adyacente según la geometría actual.
+    fn focus(&mut self, d: Focus) {
+        let rects = self.pane_rects();
+        let Some((_, act)) = rects
+            .iter()
+            .find(|(p, _)| *p == self.panes.active)
+            .map(|(p, r)| (*p, *r))
+        else {
+            return;
+        };
+        let cx = act.x + act.width / 2;
+        let cy = act.y + act.height / 2;
+        let target = match d {
+            Focus::Left => (act.x.saturating_sub(1), cy),
+            Focus::Right => (act.x + act.width, cy),
+            Focus::Up => (cx, act.y.saturating_sub(1)),
+            Focus::Down => (cx, act.y + act.height),
+        };
+        for (p, r) in &rects {
+            if *p == self.panes.active {
+                continue;
+            }
+            let inside =
+                target.0 >= r.x && target.0 < r.x + r.width && target.1 >= r.y && target.1 < r.y + r.height;
+            if inside {
+                self.panes.active = *p;
+                return;
+            }
+        }
+        // no hay pane adyacente: silencio
     }
 
     /// Búsqueda smart-case, wrap en todo el buffer.
