@@ -19,17 +19,11 @@ pub fn build(app: &mut App, width: usize) -> Line<'static> {
     };
     spans.push(Span::styled(label, Style::new().bg(chip_bg).fg(t.accent)));
 
-    // centro: mensaje / error / prompt búsqueda / nombre archivo
-    let center = if let Some(e) = &app.config_error {
-        let _ = e;
-        app.live_msg()
-    } else {
-        app.live_msg()
-    };
+    // centro: prompt búsqueda / mensaje / nombre
     let center = if app.search_prompt {
         format!("buscar: {}▏", app.search_input)
     } else {
-        center.unwrap_or_default()
+        app.live_msg().unwrap_or_default()
     };
     let name = app.buffer().display_name();
     let name_span = format!(" {}{}", name, if app.buffer().modified { " [+] " } else { " " });

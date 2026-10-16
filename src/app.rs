@@ -342,8 +342,7 @@ impl App {
                 }
             }
             DeleteCharBack => {
-                if !self.buffer().delete_back() {
-                }
+                self.buffer().delete_back();
             }
             DeleteLine => self.buffer().delete_line(),
             Undo => self.buffer().undo(),

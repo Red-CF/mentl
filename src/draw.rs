@@ -108,8 +108,10 @@ fn render_line(
     for (s, e) in matches {
         marks.push((*s, *e, false));
     }
-    // segmentos elementales
+    // segmentos elementales: cubren TODA la línea (0..len)
     let mut pts: Vec<usize> = marks.iter().flat_map(|m| [m.0, m.1]).collect();
+    pts.push(0);
+    pts.push(text.len());
     pts.sort_unstable();
     pts.dedup();
     let mut spans = Vec::new();
