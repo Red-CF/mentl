@@ -8,8 +8,15 @@ use serde_json::Value;
 
 #[derive(Debug)]
 pub enum OutMsg {
-    Request { id: u64, method: String, params: Value },
-    Notification { method: String, params: Value },
+    Request {
+        id: u64,
+        method: String,
+        params: Value,
+    },
+    Notification {
+        method: String,
+        params: Value,
+    },
 }
 
 impl OutMsg {
@@ -19,7 +26,9 @@ impl OutMsg {
             OutMsg::Notification { method, params } => (method, params, None),
         };
         let body = match id {
-            Some(id) => serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
+            Some(id) => {
+                serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
+            }
             None => serde_json::json!({"jsonrpc":"2.0","method":method,"params":params}),
         };
         let body = body.to_string();
@@ -29,9 +38,20 @@ impl OutMsg {
 
 /// Mensaje entrante parseado de forma tolerante.
 pub enum InMsg {
-    Response { id: u64, result: Value, error: Option<Value> },
-    Request { id: u64, method: String, params: Value },
-    Notification { method: String, params: Value },
+    Response {
+        id: u64,
+        result: Value,
+        error: Option<Value>,
+    },
+    Request {
+        id: u64,
+        method: String,
+        params: Value,
+    },
+    Notification {
+        method: String,
+        params: Value,
+    },
     Unknown,
 }
 
@@ -78,14 +98,10 @@ pub fn parse_in(body: &str) -> InMsg {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct LspPosition {
     pub line: u32,
     pub character: u32,
-}
-impl Default for LspPosition {
-    fn default() -> Self {
-        Self { line: 0, character: 0 }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -115,14 +131,10 @@ struct RawDiag {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct LspRange {
     pub start: LspPosition,
     pub end: LspPosition,
-}
-impl Default for LspRange {
-    fn default() -> Self {
-        Self { start: LspPosition::default(), end: LspPosition::default() }
-    }
 }
 
 /// publishDiagnostics.params: {uri, diagnostics: [..]} — tolerante.
@@ -188,7 +200,11 @@ pub fn strip_markdown(s: &str) -> String {
             fence = !fence;
             continue;
         }
-        let clean = if fence { line.to_string() } else { line.replace("`", "") };
+        let clean = if fence {
+            line.to_string()
+        } else {
+            line.replace("`", "")
+        };
         out.push(clean);
     }
     let mut res = String::new();
@@ -226,32 +242,35 @@ pub fn parse_definition(result: &Value) -> Vec<DefLocation> {
 
 fn loc_from(v: &Value) -> Vec<DefLocation> {
     // Location {uri, range:{start}}
-    if let (Some(uri), Some(range)) = (v.get("uri"), v.get("range")) {
-        if let Some(uri) = uri.as_str() {
-            let start = range.get("start").unwrap_or(&Value::Null);
-            return vec![DefLocation {
-                uri: uri.to_string(),
-                line: start.get("line").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
-                character: start.get("character").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
-            }];
-        }
+    if let (Some(uri), Some(range)) = (v.get("uri"), v.get("range"))
+        && let Some(uri) = uri.as_str()
+    {
+        let start = range.get("start").unwrap_or(&Value::Null);
+        return vec![DefLocation {
+            uri: uri.to_string(),
+            line: start.get("line").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
+            character: start.get("character").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
+        }];
     }
     // LocationLink {targetUri, targetSelectionRange|targetRange}
     if v.get("targetUri").is_some() {
         let pick = v
             .get("targetSelectionRange")
             .or_else(|| v.get("targetRange"));
-        if let Some(r) = pick {
-            if let Some(uri) = v.get("targetUri").and_then(|u| u.as_str()) {
-                return vec![DefLocation {
-                    uri: uri.to_string(),
-                    line: r.pointer("/start/line").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
-                    character: r
-                        .pointer("/start/character")
-                        .and_then(|c| c.as_u64())
-                        .unwrap_or(0) as u32,
-                }];
-            }
+        if let Some(r) = pick
+            && let Some(uri) = v.get("targetUri").and_then(|u| u.as_str())
+        {
+            return vec![DefLocation {
+                uri: uri.to_string(),
+                line: r
+                    .pointer("/start/line")
+                    .and_then(|l| l.as_u64())
+                    .unwrap_or(0) as u32,
+                character: r
+                    .pointer("/start/character")
+                    .and_then(|c| c.as_u64())
+                    .unwrap_or(0) as u32,
+            }];
         }
     }
     vec![]
@@ -267,7 +286,7 @@ pub struct CompletionItem {
 /// completion result tolerante: [item] | {items} | null.
 /// insert = insertText -> textEdit.newText -> label. Snippets RAW (deferred).
 pub fn parse_completion(result: &Value) -> Vec<CompletionItem> {
-    let items = match result {
+    match result {
         Value::Array(a) => some_items(a),
         Value::Object(_) => {
             if result.get("isIncomplete").is_some() || result.get("items").is_some() {
@@ -283,8 +302,7 @@ pub fn parse_completion(result: &Value) -> Vec<CompletionItem> {
             }
         }
         _ => vec![],
-    };
-    items
+    }
 }
 
 fn some_items(arr: &[Value]) -> Vec<CompletionItem> {
@@ -307,7 +325,11 @@ fn some_items(arr: &[Value]) -> Vec<CompletionItem> {
                 })
                 .unwrap_or_else(|| label.clone());
             let kind = it.get("kind").and_then(|k| k.as_u64()).unwrap_or(1) as u32;
-            Some(CompletionItem { label, kind, insert })
+            Some(CompletionItem {
+                label,
+                kind,
+                insert,
+            })
         })
         .collect()
 }
@@ -320,19 +342,21 @@ pub fn uri_to_path(uri: &str) -> Option<std::path::PathBuf> {
     let mut out: Vec<u8> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Some(h) = bytes.get(i + 1..i + 3) {
-                if let Ok(n) = u8::from_str_radix(std::str::from_utf8(h).ok()?, 16) {
-                    out.push(n);
-                    i += 3;
-                    continue;
-                }
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(h) = bytes.get(i + 1..i + 3)
+            && let Ok(n) = u8::from_str_radix(std::str::from_utf8(h).ok()?, 16)
+        {
+            out.push(n);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;
     }
-    Some(std::path::PathBuf::from(String::from_utf8_lossy(&out).into_owned()))
+    Some(std::path::PathBuf::from(
+        String::from_utf8_lossy(&out).into_owned(),
+    ))
 }
 
 pub fn path_to_uri(p: &std::path::Path) -> String {

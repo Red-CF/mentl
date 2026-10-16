@@ -1,7 +1,7 @@
 //! Tema: paleta por defecto (inspiración noche, tu [theme] sobreescribe).
 
-use ratatui::style::Color;
 use crate::config::ThemeConfig;
+use ratatui::style::Color;
 
 /// Estilo de cursor geek: block / bar / underline (cicla con leader c).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -59,7 +59,8 @@ fn hex(s: &str) -> Option<Color> {
 
 impl Theme {
     pub fn build(cfg: &ThemeConfig) -> Self {
-        let pick = |opt: &Option<String>, default: Color| opt.as_deref().and_then(hex).unwrap_or(default);
+        let pick =
+            |opt: &Option<String>, default: Color| opt.as_deref().and_then(hex).unwrap_or(default);
         Self {
             fg: pick(&cfg.fg, Color::Rgb(0xc0, 0xca, 0xf5)),
             bg: pick(&cfg.bg, Color::Rgb(0x13, 0x17, 0x22)),

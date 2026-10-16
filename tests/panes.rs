@@ -1,7 +1,7 @@
 //! Panes: árbol binario — split, close (medio/raíz), layout, relink.
 
-use ratatui::layout::Rect;
 use mentl::panes::{Dir, Panes};
+use ratatui::layout::Rect;
 
 fn area() -> Rect {
     Rect::new(0, 0, 80, 24)

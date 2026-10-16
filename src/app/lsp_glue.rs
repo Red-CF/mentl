@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::app::{same_path, App, CompletionPopup, Diag, HoverOrDef};
+use crate::app::{App, CompletionPopup, Diag, HoverOrDef, same_path};
 use crate::lsp::{self, LspEvent};
 
 impl App {
@@ -21,11 +21,15 @@ impl App {
         let mut to_send: Vec<(&'static str, PathBuf, String)> = Vec::new();
         for b in self.buffers.iter().flatten() {
             let Some(path) = b.path.clone() else { continue };
-            let Some(lang) = self.lsp.language_of(&path) else { continue };
+            let Some(lang) = self.lsp.language_of(&path) else {
+                continue;
+            };
             if !self.lsp.is_ready(lang) {
                 continue;
             }
-            let state = self.sync_state.entry(path.clone())
+            let state = self
+                .sync_state
+                .entry(path.clone())
                 .or_insert((u64::MAX, None));
             let (sent_rev, pending_since) = *state;
             if b.rev != sent_rev {
@@ -69,7 +73,9 @@ impl App {
         if !self.config.lsp.enabled {
             return;
         }
-        let Some(lang) = self.lsp.language_of(path) else { return };
+        let Some(lang) = self.lsp.language_of(path) else {
+            return;
+        };
         if !self.lsp.is_ready(lang) {
             return;
         }
@@ -81,7 +87,12 @@ impl App {
         else {
             return;
         };
-        let text = text_b.rope.lines().map(|l| l.to_string()).collect::<Vec<_>>().join("");
+        let text = text_b
+            .rope
+            .lines()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("");
         let rev = text_b.rev;
         let uri = lsp::types::path_to_uri(path);
         let params = serde_json::json!({
@@ -95,8 +106,12 @@ impl App {
         if !self.config.lsp.enabled {
             return;
         }
-        let Some(path) = self.buffer().path.clone() else { return };
-        let Some(lang) = self.lsp.language_of(&path) else { return };
+        let Some(path) = self.buffer().path.clone() else {
+            return;
+        };
+        let Some(lang) = self.lsp.language_of(&path) else {
+            return;
+        };
         if !self.lsp.is_ready(lang) {
             return;
         }
@@ -134,7 +149,8 @@ impl App {
                             .iter()
                             .flatten()
                             .filter(|b| {
-                                b.path.as_ref()
+                                b.path
+                                    .as_ref()
                                     .is_some_and(|p| self.lsp.language_of(p) == Some(lang))
                             })
                             .map(|b| b.path.clone().unwrap())
@@ -181,28 +197,35 @@ impl App {
                         if self.buffer().rev == rev && !self.buffer().ai {
                             let items = lsp::types::parse_completion(&body);
                             if !items.is_empty() {
-                                self.completion = Some(CompletionPopup { items, filtered: vec![], cursor: 0 });
+                                self.completion = Some(CompletionPopup {
+                                    items,
+                                    filtered: vec![],
+                                    cursor: 0,
+                                });
                                 self.completion_refilter();
                                 need = true;
                             }
                         }
-                    }
-                    else {
-                    // hover pendiente con este id?
-                    let hover_hit = self.hover_wait.as_ref().is_some_and(|(r, _, _)| *r == req_id);
-                    if hover_hit {
-                        self.hover_wait = None;
-                        self.hover = lsp::types::parse_hover(&body);
-                        need = self.hover.is_some();
                     } else {
-                        let def_hit = self.def_wait.as_ref().is_some_and(|(r, _, _)| *r == req_id);
-                        if def_hit {
-                            let (_, origin, _) = self.def_wait.take().unwrap();
-                            let locs = lsp::types::parse_definition(&body);
-                            self.goto_locations(locs, origin);
-                            need = true;
+                        // hover pendiente con este id?
+                        let hover_hit = self
+                            .hover_wait
+                            .as_ref()
+                            .is_some_and(|(r, _, _)| *r == req_id);
+                        if hover_hit {
+                            self.hover_wait = None;
+                            self.hover = lsp::types::parse_hover(&body);
+                            need = self.hover.is_some();
+                        } else {
+                            let def_hit =
+                                self.def_wait.as_ref().is_some_and(|(r, _, _)| *r == req_id);
+                            if def_hit {
+                                let (_, origin, _) = self.def_wait.take().unwrap();
+                                let locs = lsp::types::parse_definition(&body);
+                                self.goto_locations(locs, origin);
+                                need = true;
+                            }
                         }
-                    }
                     }
                 }
             }
@@ -223,11 +246,9 @@ impl App {
             return;
         };
         let same = same_path(self.buffer().path.as_ref(), Some(&path));
-        if !same {
-            if let Err(e) = self.open_in_pane(&path) {
-                self.status_msg(format!("no puedo abrir: {e}"));
-                return;
-            }
+        if !same && let Err(e) = self.open_in_pane(&path) {
+            self.status_msg(format!("no puedo abrir: {e}"));
+            return;
         }
         let (l, g) = self.buffer().pos_of_lsp(first.line, first.character);
         self.buffer().to(l, g);
@@ -260,7 +281,9 @@ impl App {
             HoverOrDef::Hover => "textDocument/hover",
             HoverOrDef::Def => "textDocument/definition",
         };
-        let Some(req_id) = self.lsp.request(lang, method, params) else { return };
+        let Some(req_id) = self.lsp.request(lang, method, params) else {
+            return;
+        };
         match kind {
             HoverOrDef::Hover => {
                 self.hover = None;
@@ -271,5 +294,4 @@ impl App {
             }
         }
     }
-
 }

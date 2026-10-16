@@ -1,9 +1,8 @@
 //! Lote 1 de edición: visual ops, clipboard, prompts de goto/replace.
 
-
+use crate::buffer::SelKind;
 use crate::input::InputKey;
 use crate::keymap::Mode;
-use crate::buffer::SelKind;
 
 pub enum VisualOp {
     Delete,
@@ -14,7 +13,6 @@ pub enum VisualOp {
 }
 
 impl super::App {
-
     /// Rango normalizado (min, max) de líneas/graphemes de la selección.
     pub(super) fn sel_range(&self) -> Option<((usize, usize), (usize, usize))> {
         let sel = self.selection?;
@@ -35,7 +33,9 @@ impl super::App {
         if self.mode != Mode::Visual {
             return;
         }
-        let Some((min, max)) = self.sel_range() else { return };
+        let Some((min, max)) = self.sel_range() else {
+            return;
+        };
         let line_kind = self
             .selection
             .map(|s| s.kind == SelKind::Line)
@@ -107,8 +107,7 @@ impl super::App {
             self.buffer().insert_text(&format!("\n{text}"), "insert");
             self.buffer().to(l + 1, 0);
         } else {
-            self.buffer()
-                .insert_text(&clip.join("\n"), "insert");
+            self.buffer().insert_text(&clip.join("\n"), "insert");
         }
         self.follow_cursor();
     }

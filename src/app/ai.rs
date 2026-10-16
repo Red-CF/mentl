@@ -2,10 +2,10 @@
 
 use std::time::Instant;
 
-use crate::app::{App, AiJob};
+use crate::app::{AiJob, App};
+use crate::buffer::Buffer;
 use crate::keymap::Mode;
 use crate::panes::Dir;
-use crate::buffer::Buffer;
 
 impl App {
     pub(super) fn ai_toggle(&mut self) {
@@ -23,7 +23,7 @@ impl App {
         self.cursor_style_dirty = true;
     }
 
-pub(super) fn ai_context(&mut self) {
+    pub(super) fn ai_context(&mut self) {
         let path = self.buffer().path.clone();
         let Some(p) = path else {
             self.status_msg("buffer sin archivo para contexto");
@@ -38,12 +38,15 @@ pub(super) fn ai_context(&mut self) {
             .map(|l| l.to_string())
             .collect::<Vec<_>>()
             .join("");
-        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = p
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         self.ai_ctx = Some(format!("Archivo: {}\n```\n{content}\n```", p.display()));
         self.status_msg(format!("ctx: {name} (máx {max} líneas)"));
     }
 
-pub(super) fn ai_submit(&mut self) {
+    pub(super) fn ai_submit(&mut self) {
         let (line, _) = self.buffer().cursor;
         let prompt = self.buffer().line_text(line).trim().to_string();
         if prompt.is_empty() || prompt.starts_with("▸") || prompt.starts_with("…") {
@@ -66,15 +69,20 @@ pub(super) fn ai_submit(&mut self) {
             .spawn(move || ai_run(cmd, final_prompt, timeout, tx));
         // transcript: bloque de prompt + marcador pendiente en el EOF
         self.buffer().file_end();
-        self.buffer().insert_text(&format!("\n▸ {prompt}\n"), "insert");
+        self.buffer()
+            .insert_text(&format!("\n▸ {prompt}\n"), "insert");
         self.buffer().file_end();
         self.buffer().insert_text("\n… thinking …", "insert");
         self.buffer().file_end();
         let marker = self.buffer().cursor;
-        self.ai_jobs.push(AiJob { rx, started: Instant::now(), marker });
+        self.ai_jobs.push(AiJob {
+            rx,
+            started: Instant::now(),
+            marker,
+        });
     }
 
-pub(super) fn replace_marker_line(&mut self, line: usize, text: &str) {
+    pub(super) fn replace_marker_line(&mut self, line: usize, text: &str) {
         let b = self.buffer();
         let len_lines = b.len_lines();
         let start = b.rope.line_to_char(line.min(len_lines.saturating_sub(1)));
@@ -88,13 +96,13 @@ pub(super) fn replace_marker_line(&mut self, line: usize, text: &str) {
         b.modified = true;
     }
 
-pub(super) fn ai_tick(&mut self) -> bool {
+    pub(super) fn ai_tick(&mut self) -> bool {
         let mut changed = false;
         let timeout = std::time::Duration::from_secs(self.config.ai.timeout_secs);
         for job in std::mem::take(&mut self.ai_jobs) {
             match job.rx.try_recv() {
                 Ok(Ok(body)) => {
-                    self.replace_marker_line(job.marker.0, &body.trim_end());
+                    self.replace_marker_line(job.marker.0, body.trim_end());
                     self.status_msg("ai: respuesta lista");
                     changed = true;
                 }

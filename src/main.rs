@@ -1,9 +1,9 @@
 //! mentl — editor TUI. main = arg parse, terminal guard, loop.
 
-use std::time::Duration;
 use crossterm::event::{self, Event};
 use crossterm::execute;
 use ratatui::Terminal;
+use std::time::Duration;
 
 use mentl::app::App;
 use mentl::config;

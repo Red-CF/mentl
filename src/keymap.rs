@@ -1,10 +1,10 @@
 //! Keymap: bindings (lista plana, MVP scale) + matching longest-prefix con
 //! secuencia pendiente. "g g" = chord, "leader q" expande el leader del config.
 
-use std::collections::HashMap;
 use crate::action;
 use crate::config::Keys;
 use crate::input::InputKey;
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mode {
@@ -73,7 +73,10 @@ impl KeyMap {
                     warnings.push(format!("acción desconocida «{act}» para «{seq}»"));
                     continue;
                 }
-                map.modes.entry(mode).or_default().push(Bind { keys, action: act.clone() });
+                map.modes.entry(mode).or_default().push(Bind {
+                    keys,
+                    action: act.clone(),
+                });
             }
         }
         (map, warnings)
@@ -97,10 +100,6 @@ impl KeyMap {
                 prefix = true;
             }
         }
-        if prefix {
-            Match::Pending
-        } else {
-            Match::None
-        }
+        if prefix { Match::Pending } else { Match::None }
     }
 }
