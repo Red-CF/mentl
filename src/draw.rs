@@ -48,16 +48,6 @@ fn draw_welcome(f: &mut Frame, area: Rect, app: &mut App) {
     let mut rows = vec![Line::from(logo_spans)]; // logo espaciado
 
     let animating = app.welcome_input.is_none();
-    let opts: Vec<(&str, &str)> = if animating {
-        vec![
-            ("abrir proyecto", "«cwd» como árbol"),
-            ("buscar archivo", "finder difuso"),
-            ("abrir ruta…", ""),
-            ("solo AI", "pane de claude"),
-        ]
-    } else {
-        vec![]
-    };
 
     rows.push(Line::styled("", Style::new()));
     if let Some(inp) = &app.welcome_input {
@@ -66,8 +56,8 @@ fn draw_welcome(f: &mut Frame, area: Rect, app: &mut App) {
             Style::new().fg(t.accent),
         ));
         rows.push(Line::styled("Enter abre · Esc cancela", Style::new().fg(t.gutter)));
-    } else {
-        for (i, (label, hint)) in opts.iter().enumerate() {
+    } else if animating {
+        for (i, (label, hint)) in App::MENU.iter().enumerate() {
             let sel = i == app.welcome_cursor;
             let style = if sel {
                 Style::new().bg(t.accent).fg(t.cursor_fg)
@@ -86,6 +76,9 @@ fn draw_welcome(f: &mut Frame, area: Rect, app: &mut App) {
         }
     }
     rows.push(Line::styled("", Style::new()));
+    if let Some(e) = app.live_msg() {
+        rows.push(Line::styled(format!("✖ {e}"), Style::new().fg(t.diag_error)));
+    }
     rows.push(Line::styled(
         "j/k mueve · Enter elige · q sale",
         Style::new().fg(t.gutter),

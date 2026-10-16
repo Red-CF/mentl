@@ -10,7 +10,7 @@
 | line_text línea media | 667 ns | **hottest alloc**: clona String por llamada — se usa en clamp por movimiento y draw por línea/pane |
 | mv cursor ±1 (clamp) | 541 ns | pasa por line_len → line_text ×2 |
 | insert+backspace (par undo) | 5.0 µs | incluye snap-rope-clone en boundary |
-| undo pop | 42 ns | snapshot restore |
+| undo ciclo (snap+pop) | 2.0 µs | pop a secas era mayormente no-op (review); ciclo honesto = snap-rope-clone + restore |
 | on_key j (keymap→dispatch→follow) | 1.3 µs | 100% de input-path |
 | lsp roundtrip pos (UTF-16) | 1.7 µs | |
 | parse_diagnostics 300 | 236 µs | solo en publish |

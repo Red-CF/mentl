@@ -113,12 +113,15 @@ impl App {
         let arg_dir = arg_ref.as_ref().filter(|p| p.is_dir()).cloned();
         let screen;
         let mut buffers = Vec::new();
+        let arg_dir = arg.as_ref().filter(|p| p.is_dir()).cloned();
         let no_arg = arg.is_none();
-        let arg_is_dir = arg.as_ref().is_some_and(|p| p.is_dir());
+        let arg_is_dir = arg_dir.is_some();
         let mut msg = None;
         match arg {
             None => screen = Screen::Welcome,
-            Some(_) if arg_is_dir => {
+            Some(p) if arg_is_dir => {
+                let root = p.clone();
+                let _ = root; // project_root/sidebar ya salen de arg_dir
                 screen = Screen::Editor;
             }
             Some(p) => match Buffer::open(&p) {
@@ -363,7 +366,8 @@ impl App {
         changed |= self.ai_tick();
         // animación del welcome (frame cycling, dibujo barato)
         if self.screen == Screen::Welcome && self.config.welcome.anim {
-            let ms = std::time::Duration::from_millis(self.config.welcome.anim_ms);
+            // floor = tick del loop — sin esto, anim_ms=0 hace redraw cada 120ms
+            let ms = std::time::Duration::from_millis(self.config.welcome.anim_ms.max(120));
             if self.anim_last.elapsed() >= ms {
                 self.anim_frame = self.anim_frame.wrapping_add(1);
                 self.anim_last = Instant::now();
@@ -735,7 +739,13 @@ impl App {
 
     // ------------------------------------------------------------- welcome --
 
-    const MENU: [&str; 4] = ["abrir proyecto (cwd)", "buscar archivo", "abrir ruta…", "solo AI"];
+    /// Única fuente del menú welcome (draw.rs la reutiliza — sin duplicar).
+    pub const MENU: [(&str, &str); 4] = [
+        ("abrir proyecto", "«cwd» como árbol"),
+        ("buscar archivo", "finder difuso"),
+        ("abrir ruta…", ""),
+        ("solo AI", "pane de claude"),
+    ];
 
     fn welcome_key(&mut self, k: InputKey) {
         use crossterm::event::KeyCode as K;
@@ -769,11 +779,13 @@ impl App {
     fn welcome_execute(&mut self) {
         match self.welcome_cursor {
             0 => {
-                // abrir proyecto cwd
                 self.screen = Screen::Editor;
                 let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                self.project_root = root.clone();
-                self.sidebar = Some(crate::explorer::Sidebar::new(root));
+                // ya abierta al arrancar sin args — no re-caminar el árbol
+                if self.sidebar.as_ref().map(|s| s.root == root) != Some(true) {
+                    self.project_root = root.clone();
+                    self.sidebar = Some(crate::explorer::Sidebar::new(root));
+                }
             }
             1 => {
                 self.screen = Screen::Editor;
@@ -808,8 +820,8 @@ impl App {
         match self.open_in_pane(&p) {
             Ok(()) => self.screen = Screen::Editor,
             Err(e) => {
+                // se queda en welcome para reintentar; el error se ve en el hub
                 self.status_msg(format!("{e}"));
-                self.screen = Screen::Editor;
             }
         }
     }

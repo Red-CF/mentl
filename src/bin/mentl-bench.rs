@@ -13,7 +13,10 @@ use mentl::lsp::types;
 
 fn median(mut xs: Vec<Duration>) -> Duration {
     xs.sort();
-    xs[xs.len() / 2]
+    match xs.is_empty() {
+        true => Duration::ZERO,
+        false => xs[xs.len() / 2],
+    }
 }
 
 fn bench(name: &str, iters: usize, mut f: impl FnMut()) -> Duration {
@@ -39,6 +42,7 @@ fn main() {
     let iters = std::env::args()
         .nth(1)
         .and_then(|a| a.parse::<usize>().ok())
+        .filter(|&i| i > 0)
         .unwrap_or(200);
     println!("mentl-bench (iters={iters}, mediana)\n");
 
@@ -68,7 +72,10 @@ fn main() {
         let (l, c) = b.lsp_pos_of(2_500, 10);
         b.pos_of_lsp(l, c);
     });
-    bench("undo pop", iters, || {
+    // ciclo honesto: snap (rope clone) + pop — el pop a secas estaba
+    // midiendo mayormente no-ops contra la pila vacía (hallazgo del review)
+    bench("undo ciclo (snap+pop, mismo stroke)", iters, || {
+        b.insert_text("x", "insert");
         b.undo();
     });
 
