@@ -109,7 +109,7 @@ jobs:
           else
             mv "target/release/mentl$EXT" "mentl-${{ matrix.name }}$EXT"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mentl-${{ matrix.name }}
           path: mentl-*
