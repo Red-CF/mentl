@@ -7,7 +7,7 @@ use crate::buffer::Buffer;
 use crate::keymap::Mode;
 use crate::statusline;
 use ratatui::layout::Rect;
-use ratatui::style::{Style, Stylize};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
