@@ -24,9 +24,9 @@ fn open_cicla_y_cierra_tabs() {
     let a = file("a", "uno\n");
     let b = file("b", "dos\n");
     let mut app = App::new(Some(a.clone()));
-    assert_eq!(app.buffers.len(), 1);
+    assert_eq!(app.open_count(), 1);
     app.open_in_pane(&b).expect("abre B");
-    assert_eq!(app.buffers.len(), 2, "push+retarget: las dos tabs");
+    assert_eq!(app.open_count(), 2, "push+retarget: las dos tabs");
     // B activo
     assert!(mentl::app::same_path(app.buffer().path.as_ref(), Some(&b)));
     app.on_key(key("space"));
@@ -37,7 +37,7 @@ fn open_cicla_y_cierra_tabs() {
     assert!(mentl::app::same_path(app.buffer().path.as_ref(), Some(&b)));
     app.on_key(key("space"));
     app.on_key(key("d")); // close B
-    assert_eq!(app.buffers.len(), 1);
+    assert_eq!(app.open_count(), 1);
     assert!(mentl::app::same_path(app.buffer().path.as_ref(), Some(&a)));
     drop(app);
     let _ = std::fs::remove_file(a);
@@ -81,7 +81,7 @@ fn esc_popup_solo_cierra_popup_no_insert() {
 fn ai_buffer_no_bloquea_quit_y_no_lsp() {
     let a = file("d", "x\n");
     let mut app = App::new(Some(a));
-    app.buffers.push(mentl::buffer::Buffer::ai());
+    app.buffers.push(Some(mentl::buffer::Buffer::ai()));
     app.panes.panes[app.panes.active].buffer = 1; // activo = AI
     app.on_key(key("i"));
     app.on_key(k(KeyCode::Char('h')));
@@ -117,7 +117,7 @@ fn explorer_abre_en_tab() {
     app.on_key(k(KeyCode::Enter));
     assert!(!app.sidebar_focus, "foco vuelve al editor");
     assert!(app.sidebar.is_some(), "la sidebar se queda abierta");
-    assert_eq!(app.buffers.len(), 2);
+    assert_eq!(app.open_count(), 2);
     assert_eq!(
         app.buffer().path.clone().unwrap().file_name().unwrap().to_string_lossy(),
         "util.rs"

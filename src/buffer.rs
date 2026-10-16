@@ -594,4 +594,34 @@ mod tests {
         assert_eq!(b.pos_of_lsp(99, 99), (b.len_lines() - 1, b.line_len(b.len_lines() - 1)));
         assert_eq!(b.lsp_pos_of(0, 999).1 as usize, b.line_utf16_len(0));
     }
+
+    #[test]
+    fn strokes_de_undo_grupan_por_accion_y_tiempo() {
+        let mut b = buf("hola\n");
+        b.insert_text("a", "insert"); // al cursor (0,0): "ahola"
+        b.insert_text("b", "insert"); // mismo stroke <1s -> UNA undo
+        assert_eq!(b.undo.undo.len(), 1);
+        b.insert_text("\n", "insert"); // split: "ab"/"hola"
+        // mismo stroke sigue agrupado (instant-based)
+        assert_eq!(b.undo.undo.len(), 1);
+        b.delete_back(); // join: "abhola"
+        // stroke distinto -> snapshot nuevo
+        assert_eq!(b.undo.undo.len(), 2);
+        b.undo();
+        assert_eq!(b.line_text(0), "ab");
+        b.undo();
+        assert_eq!(b.line_text(0), "hola", "2 undos: delete + sesión insert");
+    }
+
+    #[test]
+    fn rev_cuenta_toda_mutacion() {
+        let mut b = buf("x\n");
+        let r0 = b.rev;
+        b.insert_text("a", "insert");
+        assert_eq!(b.rev, r0 + 1);
+        b.delete_line();
+        assert_eq!(b.rev, r0 + 2);
+        b.undo();
+        assert_eq!(b.rev, r0 + 3, "undo también muta (didChange)");
+    }
 }

@@ -113,7 +113,7 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
         let Some(pane) = app.panes.panes.get(pane_id) else { continue };
         let scroll = pane.view.scroll;
         // severidad por línea (min = más grave primero): 1 error > 2 warn > resto
-        let path = app.buffers[buffer_idx].path.clone();
+        let path = app.buffers[buffer_idx].as_ref().and_then(|b| b.path.clone());
         let mut diag_by_line: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
         if let Some(p) = path.as_ref() {
             if let Some(ds) = app.diagnostics.get(p) {
@@ -126,7 +126,7 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
         draw_pane(
             f,
             rect,
-            &app.buffers[buffer_idx],
+            app.buffers[buffer_idx].as_ref().expect("buffer vivo"),
             scroll,
             active,
             app.config.editor.tab_width,
@@ -183,6 +183,7 @@ fn draw_tabs(f: &mut Frame, rect: Rect, app: &mut App) {
     let labels: Vec<(String, bool)> = app
         .buffers
         .iter()
+        .flatten()
         .enumerate()
         .map(|(i, b)| {
             let dot = if b.modified && b.is_persistent() { " •" } else { "" };

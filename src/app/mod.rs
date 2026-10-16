@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use unicode_segmentation::UnicodeSegmentation;
 use std::time::Instant;
 
 use crate::action::Action;
@@ -25,10 +24,13 @@ pub enum Screen {
     Editor,
 }
 
+mod ai;
+mod ui_panels;
+
 pub struct App {
     pub screen: Screen,
     pub mode: Mode,
-    pub buffers: Vec<Buffer>,
+    pub buffers: Vec<Option<Buffer>>,
     pub panes: Panes,
     pub finder: Option<Finder>,
     /// rect del área completa de editor (lo pone el draw)
@@ -136,7 +138,7 @@ impl App {
             }
             Some(p) => match Buffer::open(&p) {
                 Ok(b) => {
-                    buffers.push(b);
+                    buffers.push(Some(b));
                     screen = Screen::Editor;
                 }
                 Err(e) => {
@@ -159,7 +161,7 @@ impl App {
             (None, true) => None,
         };
         if buffers.is_empty() {
-            buffers.push(Buffer::empty(None));
+            buffers.push(Some(Buffer::empty(None)));
         }
         let mut app = Self {
             screen,
@@ -228,9 +230,30 @@ impl App {
         self.panes.buffer_of(self.panes.active)
     }
 
+    /// Nº de buffers vivos (tombstones fuera).
+    pub fn open_count(&self) -> usize {
+        self.buffers.iter().filter(|b| b.is_some()).count()
+    }
+
     pub fn buffer(&mut self) -> &mut Buffer {
         let idx = self.active_buffer();
-        &mut self.buffers[idx]
+        self.buffers[idx].as_mut().expect("pane apunta a buffer vivo")
+    }
+
+    /// Vecino vivo del buffer idx (prev, si no next) — para cerrar tabs.
+    fn neighbor_buffer(&self, idx: usize) -> usize {
+        let alive: Vec<usize> = self
+            .buffers
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| b.is_some().then_some(i))
+            .collect();
+        if alive.len() <= 1 {
+            return idx;
+        }
+        let prev = alive.iter().rev().find(|&&i| i < idx).copied();
+        let next = alive.iter().find(|&&i| i > idx).copied();
+        prev.or(next).unwrap_or(idx)
     }
 
     /// Push o retarget: si el path ya está abierto, el pane activo apunta a
@@ -239,17 +262,25 @@ impl App {
         let b = Buffer::open(path)?;
         let new_path = b.path.clone();
         // ya abierto en otro buffer? (comparación por slot distinto al activo)
-        if let Some(existing) = self.buffers.iter().position(|bb| {
-            !std::ptr::eq(bb, &self.buffers[self.active_buffer()])
-                && same_path(bb.path.as_ref(), Some(&path.to_path_buf()))
-        }) {
+        let active = self.active_buffer();
+        if let Some(existing) = self
+            .buffers
+            .iter()
+            .enumerate()
+            .filter_map(|(i, bb)| bb.as_ref().map(|b| (i, b)))
+            .find(|(i, b)| {
+                *i != active
+                    && same_path(b.path.as_ref(), Some(&path.to_path_buf()))
+            })
+            .map(|(i, _)| i)
+        {
             self.panes.panes[self.panes.active].buffer = existing;
             self.follow_cursor();
             return Ok(());
         }
-        // el buffer del pane activo se queda vivo (es una tab)
+        // push del buffer nuevo (tab) y retarget
         let idx = self.buffers.len();
-        self.buffers.push(b);
+        self.buffers.push(Some(b));
         self.panes.panes[self.panes.active].buffer = idx;
         if let Some(p) = new_path {
             let lang = self.lsp.language_of(&p);
@@ -265,35 +296,27 @@ impl App {
     /// didClose solo si nadie lo muestra, limpieza de diagnósticos/sync.
     pub fn close_buffer(&mut self) {
         let idx = self.active_buffer();
-        let path = self.buffers[idx].path.clone();
-        // vecino para el foco: prev, sino next
-        let next = if idx > 0 { idx - 1 } else { idx + 1 };
-        // retarget de TODOS los panes que apunten a idx
+        let path = self.buffers[idx].as_ref().and_then(|b| b.path.clone());
+        // retarget de TODOS los panes que apunten a idx (sin renumber: ids estables)
+        let neighbor = self.neighbor_buffer(idx);
         for pane in self.panes.panes.iter_mut() {
             if pane.buffer == idx {
-                if self.buffers.len() > 1 {
-                    pane.buffer = next.min(self.buffers.len() - 1);
-                    if pane.buffer >= idx {
-                        pane.buffer -= 1;
-                    }
-                }
-                // único buffer: se sustituye por uno vacío (sin renumber)
+                pane.buffer = neighbor;
             }
         }
-        if self.buffers.len() == 1 {
-            self.buffers[0] = Buffer::empty(None);
+        if self.open_count() == 1 {
+            // único buffer: se sustituye por uno vacío en su slot
+            self.buffers[idx] = Some(Buffer::empty(None));
         } else {
-            self.buffers.remove(idx);
-            // renumber: todo buffer index > idx baja uno
-            for pane in self.panes.panes.iter_mut() {
-                if pane.buffer > idx {
-                    pane.buffer -= 1;
-                }
-            }
+            self.buffers[idx] = None; // tombstone, id estable
         }
         // didClose solo si el path no vive en otro buffer
         if let Some(p) = path {
-            let still_open = self.buffers.iter().any(|bb| same_path(bb.path.as_ref(), Some(&p)));
+            let still_open = self
+                .buffers
+                .iter()
+                .flatten()
+                .any(|bb| same_path(bb.path.as_ref(), Some(&p)));
             if !still_open {
                 if let Some(lang) = self.lsp.language_of(&p) {
                     let uri = lsp::types::path_to_uri(&p);
@@ -358,7 +381,7 @@ impl App {
         }
         let debounce = std::time::Duration::from_millis(self.config.lsp.debounce_ms);
         let mut to_send: Vec<(&'static str, PathBuf, String)> = Vec::new();
-        for b in &self.buffers {
+        for b in self.buffers.iter().flatten() {
             let Some(path) = b.path.clone() else { continue };
             let Some(lang) = self.lsp.language_of(&path) else { continue };
             if !self.lsp.is_ready(lang) {
@@ -392,7 +415,11 @@ impl App {
                 }
             });
             // marca rev como mandado ANTES de que lleguen diagnósticos nuevos
-            let rev = self.buffers.iter().find(|b| b.path.as_ref() == Some(&path))
+            let rev = self
+                .buffers
+                .iter()
+                .flatten()
+                .find(|b| b.path.as_ref() == Some(&path))
                 .map(|b| b.rev)
                 .unwrap_or(0);
             self.sync_state.insert(path, (rev, None));
@@ -409,7 +436,14 @@ impl App {
         if !self.lsp.is_ready(lang) {
             return;
         }
-        let Some(text_b) = self.buffers.iter().find(|b| b.path.as_ref() == Some(path)) else { return };
+        let Some(text_b) = self
+            .buffers
+            .iter()
+            .flatten()
+            .find(|b| b.path.as_ref() == Some(path))
+        else {
+            return;
+        };
         let text = text_b.rope.lines().map(|l| l.to_string()).collect::<Vec<_>>().join("");
         let rev = text_b.rev;
         let uri = lsp::types::path_to_uri(path);
@@ -438,6 +472,7 @@ impl App {
                         let paths: Vec<PathBuf> = self
                             .buffers
                             .iter()
+                            .flatten()
                             .filter(|b| {
                                 b.path.as_ref()
                                     .is_some_and(|p| self.lsp.language_of(p) == Some(lang))
@@ -461,20 +496,30 @@ impl App {
                 LspEvent::Diagnostics { uri, diags } => {
                     if let Some(path) = lsp::types::uri_to_path(&uri) {
                         // UNA búsqueda del buffer por publish (no una por diag)
-                        let buf_slot: Option<usize> = self
+                        let slot = self
                             .buffers
-                            .iter()
-                            .position(|b| same_path(b.path.as_ref(), Some(&path)));
-                        let converted: Vec<Diag> = diags
-                            .into_iter()
-                            .map(|d| {
-                                let (line, col) = match buf_slot {
-                                    Some(i) => self.buffers[i].pos_of_lsp(d.line, d.character),
-                                    None => (d.line as usize, d.character as usize),
-                                };
-                                Diag { line, col, col_u16: d.character, severity: d.severity, msg: d.msg }
-                            })
-                            .collect();
+                            .iter_mut()
+                            .flatten()
+                            .find(|b| same_path(b.path.as_ref(), Some(&path)));
+                        let converted: Vec<Diag> = match slot {
+                            Some(b) => diags
+                                .into_iter()
+                                .map(|d| {
+                                    let (line, col) = b.pos_of_lsp(d.line, d.character);
+                                    Diag { line, col, col_u16: d.character, severity: d.severity, msg: d.msg }
+                                })
+                                .collect(),
+                            None => diags
+                                .into_iter()
+                                .map(|d| Diag {
+                                    line: d.line as usize,
+                                    col: d.character as usize,
+                                    col_u16: d.character,
+                                    severity: d.severity,
+                                    msg: d.msg,
+                                })
+                                .collect(),
+                        };
                         self.diagnostics.insert(path, converted);
                         need = true;
                     }
@@ -750,340 +795,22 @@ impl App {
 
     // -------------------------------------------------------------- fase 3 --
 
-    fn sidebar_key(&mut self, k: InputKey) {
-        use crossterm::event::KeyCode as K;
-        let Some(sb) = &mut self.sidebar else { return self.close_sidebar() };
-        match k.code {
-            K::Char('j') | K::Down => sb.move_cursor(1),
-            K::Char('k') | K::Up => sb.move_cursor(-1),
-            K::Char('l') | K::Right => {
-                if sb.rows.get(sb.cursor).is_some_and(|r| r.is_dir) {
-                    sb.toggle_row();
-                } else {
-                    self.sidebar_open_file();
-                    return;
-                }
-            }
-            K::Char('h') | K::Left => sb.collapse_or_parent(),
-            K::Enter => {
-                if sb.rows.get(sb.cursor).is_some_and(|r| r.is_dir) {
-                    sb.toggle_row();
-                } else {
-                    self.sidebar_open_file();
-                    return;
-                }
-            }
-            _ => {}
-        }
-    }
+                    /// Filas del problems panel: diagnósticos por (path, línea).
+        // ------------------------------------------------------------ completión --
 
-    fn sidebar_open_file(&mut self) {
-        let path = self
-            .sidebar
-            .as_ref()
-            .and_then(|s| s.rows.get(s.cursor))
-            .filter(|r| !r.is_dir)
-            .map(|r| r.path.clone());
-        if let Some(p) = path {
-            if let Err(e) = self.open_in_pane(&p) {
-                self.status_msg(e);
-            }
-        }
-        self.close_sidebar();
-    }
-
-    fn close_sidebar(&mut self) {
-        self.sidebar_focus = false;
-    }
-
-    fn problems_key(&mut self, k: InputKey) {
-        use crossterm::event::KeyCode as K;
-        let count = self.problem_rows().len();
-        if count == 0 {
-            return;
-        }
-        self.problems_cursor = self.problems_cursor.min(count - 1);
-        match k.code {
-            K::Char('j') | K::Down => self.problems_cursor += 1,
-            K::Char('k') | K::Up => self.problems_cursor = self.problems_cursor.saturating_sub(1),
-            K::Enter => {
-                let rows = self.problem_rows();
-                if let Some(p) = rows.get(self.problems_cursor) {
-                    let (path, line_u16, col_u16) = (p.path.clone(), p.line_u16, p.col_u16);
-                    if let Err(e) = self.open_in_pane(&path) {
-                        self.status_msg(e);
-                        return;
-                    }
-                    let (l, g) = self.buffer().pos_of_lsp(line_u16, col_u16);
-                    self.buffer().to(l, g);
-                }
-                self.problems_focus = false;
-            }
-            K::Esc => self.problems_focus = false,
-            _ => {}
-        }
-        let count = self.problem_rows().len();
-        self.problems_cursor = self.problems_cursor.min(count.saturating_sub(1));
-    }
-
-    /// Filas del problems panel: diagnósticos por (path, línea).
-    pub fn problem_rows(&self) -> Vec<ProblemRow> {
-        let mut out: Vec<ProblemRow> = Vec::new();
-        for (path, diags) in &self.diagnostics {
-            let path = path.clone();
-            for d in diags {
-                out.push(ProblemRow {
-                    path: path.clone(),
-                    line_u16: d.line as u32,
-                    col_u16: d.col_u16,
-                    line_display: d.line,
-                    severity: d.severity,
-                    msg: d.msg.clone(),
-                });
-            }
-        }
-        out.sort_by(|a, b| {
-            a.path.cmp(&b.path)
-                .then(a.line_display.cmp(&b.line_display))
-                .then(a.col_u16.cmp(&b.col_u16))
-        });
-        out
-    }
-
-    // ------------------------------------------------------------ completión --
-
-    fn completion_move(&mut self, d: isize) {
-        let Some(p) = self.completion.as_mut() else { return };
-        let n = p.filtered.len();
-        if n == 0 {
-            return;
-        }
-        let c = p.cursor as isize + d;
-        p.cursor = c.clamp(0, n as isize - 1) as usize;
-    }
-
-    fn completion_accept(&mut self, which: Option<usize>) {
-        let Some(p) = self.completion.as_ref() else { return };
-        let idx = which
-            .unwrap_or(p.cursor)
-            .min(p.filtered.len().saturating_sub(1));
-        let Some(&item_idx) = p.filtered.get(idx) else { return };
-        let insert = p.items[item_idx].insert.clone();
-        self.completion = None;
-        self.buffer().insert_text(&insert, "insert");
-        self.follow_cursor();
-        let _ = which;
-    }
-
-    fn completion_close(&mut self) {
-        self.completion = None;
-        self.completion_wait = None;
-    }
-
-    /// Refiltra el popup: prefijo = run de word-chars hacia atrás del cursor.
-    fn completion_refilter(&mut self) {
-        let (prefix, cur_g) = {
-            let b = self.buffer();
-            let text = b.line_text(b.cursor.0);
-            let (_, g) = b.cursor;
-            let start = (0..g)
-                .rev()
-                .find(|&i| {
-                    text.graphemes(true)
-                        .nth(i)
-                        .and_then(|x| x.chars().next())
-                        .map(crate::buffer::is_word)
-                        .unwrap_or(false)
-                })
-                .map_or(0usize, |i| i + 1);
-            let word_b = Buffer::grapheme_byte_of(&text, start);
-            let cut = Buffer::grapheme_byte_of(&text, g);
-            (text.get(word_b..cut).unwrap_or("").to_string(), g)
-        };
-        let Some(p) = self.completion.as_mut() else { return };
-        let _ = cur_g;
-        p.filtered = p
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, it)| it.label.to_lowercase().contains(&prefix.to_lowercase()))
-            .map(|(i, _)| i)
-            .collect();
-        p.cursor = 0;
-        if p.filtered.is_empty() {
-            self.completion_close();
-        }
-    }
-
-    fn trigger_completion(&mut self) {
-        self.ldbg("trigger");
-        if self.completion_wait.is_some() {
-            return;
-        }
-        let Some(path) = self.buffer().path.clone() else { return };
-        let Some(lang) = self.lsp.language_of(&path) else { return };
-        if !self.lsp.is_ready(lang) {
-            return;
-        }
-        let rev = self.buffer().rev;
-        self.completion_wait = Some((0, path, rev, Instant::now())); // 0 = sin mandar
-    }
-
-    /// 0 = pendiente de enviar: cuando pasa el debounce y el estado sigue
+                /// Refiltra el popup: prefijo = run de word-chars hacia atrás del cursor.
+            /// 0 = pendiente de enviar: cuando pasa el debounce y el estado sigue
     /// vivo, manda la request. Con req real: nada (la respuesta llega en
     /// on_lsp y ahí se consuma).
-    fn completion_tick(&mut self) {
-        if std::env::var("MENTL_LSP_DEBUG").is_ok() && self.completion_wait.is_some() { eprintln!("[app] comp tick"); }
-        let Some((req, path, rev, since)) = self.completion_wait.clone() else { return };
-        if self.mode != Mode::Insert {
-            self.completion_close();
-            return;
-        }
-        if req != 0 {
-            return;
-        }
-        let debounce = std::time::Duration::from_millis(self.config.ui.completion_debounce_ms);
-        if since.elapsed() < debounce {
-            return;
-        }
-        if !same_path(Some(&path), self.buffer().path.as_ref()) || self.buffer().rev != rev {
-            self.completion_close();
-            return;
-        }
-        let Some(lang) = self.lsp.language_of(&path) else {
-            self.completion_close();
-            return;
-        };
-        let (l, g) = self.buffer().cursor;
-        let (ll, col) = self.buffer().lsp_pos_of(l, g);
-        let params = serde_json::json!({
-            "textDocument": {"uri": lsp::types::path_to_uri(&path)},
-            "position": {"line": ll, "character": col},
-        });
-        match self.lsp.request(lang, "textDocument/completion", params) {
-            Some(wire) => self.completion_wait = Some((wire, path, rev, since)),
-            None => self.completion_wait = None,
-        }
-    }
+        // ------------------------------------------------------------------ AI --
 
-    // ------------------------------------------------------------------ AI --
-
-    fn ai_toggle(&mut self) {
-        // el pane activo ya muestra AI? -> ciérralo
-        if self.buffer().ai {
-            let _ = self.panes.close();
-            self.follow_cursor();
-            return;
-        }
-        self.panes.split(Dir::Horiz);
-        let idx = self.buffers.len();
-        self.buffers.push(Buffer::ai());
-        self.panes.panes[self.panes.active].buffer = idx;
-        self.mode = Mode::Insert;
-        self.cursor_style_dirty = true;
-    }
-
-    fn ai_context(&mut self) {
-        let path = self.buffer().path.clone();
-        let Some(p) = path else {
-            self.status_msg("buffer sin archivo para contexto");
-            return;
-        };
-        let max = self.config.ai.max_context_lines;
-        let content = self
-            .buffer()
-            .rope
-            .lines()
-            .take(max)
-            .map(|l| l.to_string())
-            .collect::<Vec<_>>()
-            .join("");
-        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        self.ai_ctx = Some(format!("Archivo: {}\n```\n{content}\n```", p.display()));
-        self.status_msg(format!("ctx: {name} (máx {max} líneas)"));
-    }
-
+    
+    
     /// Enter en insert-mode sobre un pane AI = manda el prompt (línea actual).
-    fn ai_submit(&mut self) {
-        let (line, _) = self.buffer().cursor;
-        let prompt = self.buffer().line_text(line).trim().to_string();
-        if prompt.is_empty() || prompt.starts_with("▸") || prompt.starts_with("…") {
-            return;
-        }
-        if let Some(job) = self.ai_jobs.last() {
-            let _ = job; // hay un job en vuelo — espera respuesta
-            return;
-        }
-        let ctx = self.ai_ctx.take();
-        let final_prompt = match ctx {
-            Some(c) => format!("{c}\n\n{prompt}"),
-            None => prompt.clone(),
-        };
-        let cmd = self.config.ai.command.clone();
-        let timeout = std::time::Duration::from_secs(self.config.ai.timeout_secs);
-        let (tx, rx) = std::sync::mpsc::channel();
-        let _ = std::thread::Builder::new()
-            .name("ai-job".into())
-            .spawn(move || ai_run(cmd, final_prompt, timeout, tx));
-        // transcript: bloque de prompt + marcador pendiente en el EOF
-        self.buffer().file_end();
-        self.buffer().insert_text(&format!("\n▸ {prompt}\n"), "insert");
-        self.buffer().file_end();
-        self.buffer().insert_text("\n… thinking …", "insert");
-        self.buffer().file_end();
-        let marker = self.buffer().cursor;
-        self.ai_jobs.push(AiJob { rx, started: Instant::now(), marker });
-    }
-
-    fn replace_marker_line(&mut self, line: usize, text: &str) {
-        let b = self.buffer();
-        let len_lines = b.len_lines();
-        let start = b.rope.line_to_char(line.min(len_lines.saturating_sub(1)));
-        let end = b
-            .rope
-            .line_to_char((line + 1).min(len_lines))
-            .min(b.rope.len_chars());
-        b.rope.remove(start..end);
-        b.insert_text(&format!("\n{text}\n"), "insert");
-        b.file_end();
-        b.modified = true;
-    }
-
+    
+    
     /// Drena respuestas de jobs AI (tick). true = redibujar.
-    fn ai_tick(&mut self) -> bool {
-        let mut changed = false;
-        let timeout = std::time::Duration::from_secs(self.config.ai.timeout_secs);
-        for job in std::mem::take(&mut self.ai_jobs) {
-            match job.rx.try_recv() {
-                Ok(Ok(body)) => {
-                    self.replace_marker_line(job.marker.0, &body.trim_end());
-                    self.status_msg("ai: respuesta lista");
-                    changed = true;
-                }
-                Ok(Err(e)) => {
-                    self.replace_marker_line(job.marker.0, &format!("✖ {e}"));
-                    self.status_msg(format!("ai: {e}"));
-                    changed = true;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    if job.started.elapsed() > timeout {
-                        self.replace_marker_line(job.marker.0, "✖ timeout");
-                        changed = true;
-                    } else {
-                        self.ai_jobs.push(job); // sigue esperando
-                    }
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    if job.started.elapsed() > timeout {
-                        self.replace_marker_line(job.marker.0, "✖ sin respuesta");
-                        changed = true;
-                    }
-                }
-            }
-        }
-        changed
-    }
-
+    
     fn search_key(&mut self, k: InputKey) {
         use crossterm::event::KeyCode as K;
         match k.code {
@@ -1207,7 +934,11 @@ impl App {
                 Err(e) => self.status_msg(e),
             },
             Quit => {
-                let persistent_dirty = self.buffers.iter().any(|b| b.is_persistent() && b.modified);
+                let persistent_dirty = self
+                    .buffers
+                    .iter()
+                    .flatten()
+                    .any(|b| b.is_persistent() && b.modified);
                 if self.quit_pending || !persistent_dirty {
                     self.quit = true;
                 } else {
@@ -1397,75 +1128,6 @@ pub fn same_path(a: Option<&PathBuf>, b: Option<&PathBuf>) -> bool {
     }
 }
 
-/// Corre el comando AI en threads: lector de stdout + watchdog de timeout.
-/// Nunca bloquea el main loop; el kill del watchdog cierra stdout y el
-/// lector termina.
-fn ai_run(
-    cmd: Vec<String>,
-    prompt: String,
-    timeout: std::time::Duration,
-    tx: std::sync::mpsc::Sender<std::io::Result<String>>,
-) {
-    use std::process::Stdio;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
-    if cmd.is_empty() {
-        let _ = tx.send(Err(std::io::Error::other("[ai] sin command")));
-        return;
-    }
-    let child = match std::process::Command::new(&cmd[0])
-        .args(&cmd[1..])
-        .arg(&prompt)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .stdin(Stdio::null())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = tx.send(Err(e));
-            return;
-        }
-    };
-    let killed = Arc::new(AtomicBool::new(false));
-    let child_shared = Arc::new(Mutex::new(child));
-
-    // watchdog: mata pasado el timeout
-    let w_child = Arc::clone(&child_shared);
-    let w_killed = Arc::clone(&killed);
-    std::thread::spawn(move || {
-        std::thread::sleep(timeout);
-        w_killed.store(true, Ordering::SeqCst);
-        if let Ok(mut c) = w_child.lock() {
-            let _ = c.kill();
-        }
-    });
-
-    // lector: stdout hasta EOF
-    let mut stdout = child_shared.lock().unwrap().stdout.take().expect("stdout");
-    let mut buf = String::new();
-    let mut io_err: Option<std::io::Error> = None;
-    {
-        use std::io::Read;
-        let mut chunk = [0u8; 8192];
-        loop {
-            match stdout.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => buf.push_str(&String::from_utf8_lossy(&chunk[..n])),
-                Err(e) => {
-                    io_err = Some(e);
-                    break;
-                }
-            }
-        }
-    }
-    let _ = child_shared.lock().unwrap().wait();
-    let _ = tx.send(match (io_err, killed.load(Ordering::SeqCst)) {
-        (Some(e), _) => Err(e),
-        (None, true) => Err(std::io::Error::other("timeout")),
-        (None, false) => Ok(buf),
-    });
-}
 
 /// Todos los matches de `pat` en `text` como rangos de bytes. smart-case:
 /// si pat tiene mayúsculas, case-sensitive; si no, case-insensitive pero
