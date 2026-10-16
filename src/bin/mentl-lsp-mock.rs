@@ -19,6 +19,7 @@ fn main() {
     let mut out = std::io::stdout();
     let mut opened_first = false;
     let mut doc_uri = "file:///mock.rs".to_string();
+    let close_count = std::cell::RefCell::new(0u64);
     loop {
         let Some(body) = read_msg(&mut inp) else { return };
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) else { continue };
@@ -53,7 +54,19 @@ fn main() {
                     }));
                 }
             }
-            "textDocument/didChange" | "textDocument/didSave" | "textDocument/didClose" => {}
+            "textDocument/didChange" | "textDocument/didSave" => {}
+            "textDocument/didClose" => {
+                *close_count.borrow_mut() += 1;
+            }
+            "textDocument/completion" => reply(&mut out, &id, serde_json::json!([
+                {"label": "mock_fn", "kind": 3, "insertText": "mock_fn(x)"},
+                {"label": "mock_var", "kind": 13, "insertText": "mock_var: u32 = 1"},
+                {"label": "MockStruct", "kind": 23, "insertText": "MockStruct{}"},
+            ])),
+            "mentl/closeCount" => {
+                let n = *close_count.borrow();
+                reply(&mut out, &id, serde_json::json!(n))
+            }
             "textDocument/hover" => reply(&mut out, &id, serde_json::json!({
                 "contents": {"kind": "markdown", "value": "# Título\n```rust\nfn mock(x: u32)\n```\nEl *hover* con `markdown`"}
             })),

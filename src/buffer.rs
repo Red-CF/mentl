@@ -21,6 +21,8 @@ pub struct Buffer {
     pub cursor: (usize, usize),
     pub modified: bool,
     pub untitled: bool,
+    /// buffer de transcript AI: fuera de LSP/sync/todo lo persistente
+    pub ai: bool,
     /// número de revisiones de edición (para debounce de LSP didChange)
     pub rev: u64,
     pub undo: Undo,
@@ -62,6 +64,7 @@ impl Buffer {
             modified: false,
             rev: 0,
             untitled: false,
+            ai: false,
             undo: Undo::default(),
             last_stroke: None,
         })
@@ -75,13 +78,39 @@ impl Buffer {
             modified: false,
             rev: 0,
             untitled: true,
+            ai: false,
             undo: Undo::default(),
             last_stroke: None,
         }
     }
 
+    /// Transcript de AI: nunca persistent, nunca LSP.
+    pub fn ai() -> Self {
+        Self {
+            path: None,
+            rope: Rope::from_str(
+                "◆ claude — escribe el prompt en una línea y Enter.\n\n",
+            ),
+            cursor: (2, 0),
+            modified: false,
+            rev: 0,
+            untitled: true,
+            ai: true,
+            undo: Undo::default(),
+            last_stroke: None,
+        }
+    }
+
+    /// ¿se persiste/guarda este buffer? (AI transcript = no)
+    pub fn is_persistent(&self) -> bool {
+        !self.ai
+    }
+
     /// Nombre para statusline: solo el archivo (las paths ya son absolutas).
     pub fn display_name(&self) -> String {
+        if self.ai {
+            return "◆ claude".into();
+        }
         match &self.path {
             Some(p) => p
                 .file_name()
@@ -483,6 +512,7 @@ mod tests {
             modified: false,
             rev: 0,
             untitled: true,
+            ai: false,
             undo: Undo::default(),
             last_stroke: None,
         }

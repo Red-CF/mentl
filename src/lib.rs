@@ -5,6 +5,7 @@ pub mod app;
 pub mod buffer;
 pub mod config;
 pub mod draw;
+pub mod explorer;
 pub mod finder;
 pub mod input;
 pub mod keymap;

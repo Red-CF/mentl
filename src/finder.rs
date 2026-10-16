@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", "vendor", ".herdr", ".venv"];
-const MAX_FILES: usize = 5000;
-const MAX_DEPTH: usize = 10;
+pub(crate) const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", "vendor", ".herdr", ".venv"];
+pub(crate) const MAX_FILES: usize = 5000;
+pub(crate) const MAX_DEPTH: usize = 10;
 const TOP: usize = 40;
 
 pub struct Finder {

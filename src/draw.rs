@@ -27,18 +27,53 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
-    let h = area.height.saturating_sub(1) as usize;
+    // filas: [tabs?] [editor(+sidebar col, +panel)] [statusline]
+    let y = area.y;
+    let tabs_h: u16 = if app.config.ui.tabs { 1 } else { 0 };
+    let editor_top = y + tabs_h;
+    let status_y = area.y + area.height - 1;
+    let editor_h = status_y - editor_top;
+    let panel_h: u16 = if app.problems_open {
+        app.config.ui.panel_height.min(editor_h.saturating_sub(4))
+    } else {
+        0
+    };
+    let pane_h = editor_h - panel_h;
+    let sidebar_w: u16 = if app.sidebar.is_some() {
+        app.config.ui.sidebar_width.min(area.width.saturating_sub(20))
+    } else {
+        0
+    };
+
+    // pane tree dentro del editor rect (solo filas de panes, panel fuera)
+    let editor = Rect {
+        x: area.x + sidebar_w,
+        y: editor_top,
+        width: area.width - sidebar_w,
+        height: pane_h,
+    };
     app.last_area = area;
-    app.last_view_h = h;
+    app.last_editor_rect = editor;
+    app.last_view_h = pane_h as usize;
     app.follow_cursor();
 
-    let editor = Rect { height: area.height - 1, ..area };
+    // tabs bar
+    if tabs_h == 1 {
+        let tabs_rect = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
+        draw_tabs(f, tabs_rect, app);
+    }
+
+    // sidebar
+    if sidebar_w > 0 {
+        let sb_rect = Rect { x: area.x, y: editor_top, width: sidebar_w, height: pane_h };
+        draw_sidebar(f, sb_rect, app);
+    }
+
+    // panes
     let mut rects = Vec::new();
     let mut seps = Vec::new();
     app.panes.layout(editor, &mut rects, &mut seps);
 
-    // separadores primero (para que el texto no los tape si acaso: no, texto
-    // no sale de su rect; orden irrelevante — aquí van después por claridad)
     for (dir, mid, r) in &seps {
         let style = Style::new().fg(app.theme.gutter);
         match dir {
@@ -65,7 +100,6 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
         }
     }
 
-    // panes
     let mut cursor_pos: Option<(u16, u16)> = None;
     let pane_specs: Vec<(usize, Rect, usize)> = rects
         .iter()
@@ -104,17 +138,30 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
         );
     }
 
+    // problems panel (bajo los panes, sobre statusline)
+    if panel_h > 0 {
+        let panel_rect = Rect { x: area.x, y: editor_top + pane_h, width: area.width, height: panel_h };
+        draw_problems(f, panel_rect, app);
+    }
+
     // statusline
-    let st_rect = Rect {
-        x: area.x,
-        y: area.y + area.height - 1,
-        width: area.width,
-        height: 1,
-    };
+    let st_rect = Rect { x: area.x, y: status_y, width: area.width, height: 1 };
     let line = statusline::build(app, area.width as usize);
     f.render_widget(Paragraph::new(line), st_rect);
 
-    // finder overlay último (encima de todo)
+    // completions popup bajo el cursor del pane activo
+    if app.completion.is_some() && cursor_pos.is_some() {
+        let (cx, cy) = cursor_pos.unwrap();
+        let pane_rect = app
+            .pane_rects()
+            .into_iter()
+            .find(|(p, _)| *p == app.panes.active)
+            .map(|(_, r)| r)
+            .unwrap_or(editor);
+        draw_completion(f, pane_rect, cx, cy, app);
+    }
+
+    // overlays último (encima de todo)
     if app.finder.is_some() {
         cursor_pos = None;
         draw_finder(f, area, app);
@@ -126,6 +173,194 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
     if let Some((x, y)) = cursor_pos {
         f.set_cursor_position(ratatui::layout::Position::from((x, y)));
     }
+}
+
+// -------------------------------------------------------------- tabs bar ---
+
+fn draw_tabs(f: &mut Frame, rect: Rect, app: &mut App) {
+    let t = app.theme;
+    let active = app.active_buffer();
+    let labels: Vec<(String, bool)> = app
+        .buffers
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let dot = if b.modified && b.is_persistent() { " •" } else { "" };
+            (format!("[{}]{} ", b.display_name(), dot), i == active)
+        })
+        .collect();
+    // truncado por la izquierda: la tab activa SIEMPRE visible
+    let mut line = String::new();
+    for (label, _) in &labels {
+        line.push_str(label);
+    }
+    if line.chars().count() > rect.width as usize {
+        // recorta: mantén el rango alrededor de la activa — MVP: suffix
+        let keep: String = labels
+            .iter()
+            .skip_while(|(_l, a)| !*a)
+            .chain(labels.iter().take_while(|(_, a)| !*a))
+            .map(|(l, _)| l.clone())
+            .take(0)
+            .collect();
+        let _ = keep;
+        // versión sencilla: solo activa + prev
+        line = format!("…{}", labels[active].0);
+    }
+    f.render_widget(
+        Paragraph::new(line).style(Style::new().fg(t.gutter).bg(t.status_bg)),
+        rect,
+    );
+    // resalta la activa re-renderizando su label con accent bg
+    let mut x = rect.x as usize;
+    for (label, is_active) in &labels {
+        let w = label.chars().count();
+        if *is_active && x + w <= rect.x as usize + rect.width as usize {
+            f.render_widget(
+                Paragraph::new(label.clone()).style(Style::new().bg(t.accent).fg(t.cursor_fg)),
+                Rect { x: x as u16, y: rect.y, width: w as u16, height: 1 },
+            );
+        }
+        x += w;
+    }
+}
+
+// -------------------------------------------------------------- sidebar ----
+
+fn draw_sidebar(f: &mut Frame, rect: Rect, app: &mut App) {
+    let t = app.theme;
+    let Some(sb) = app.sidebar.as_mut() else { return };
+    let rows_h = rect.height as usize;
+    crate::explorer::sync_scroll(sb.cursor, &mut sb.scroll, rows_h);
+    let mut lines = Vec::new();
+    // severidad por archivo (min) para el marker trailing
+    let mut i = sb.scroll;
+    while i < sb.rows.len() && lines.len() < rows_h {
+        let row = &sb.rows[i];
+        let indent = (row.depth as usize) * 2;
+        let glyph = if row.is_dir {
+            if sb.expanded.get(&row.path).copied().unwrap_or(false) { "▾ " } else { "▸ " }
+        } else {
+            "  "
+        };
+        let name = row
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| row.path.display().to_string());
+        let label = format!("{}{}{}{name}", " ".repeat(indent), glyph, "");
+        let is_cursor = i == sb.cursor && app.sidebar_focus;
+        // diag severity del archivo (min = más grave)
+        let sev = app
+            .diagnostics
+            .get(&row.path)
+            .map(|ds| ds.iter().map(|d| d.severity).min())
+            .flatten();
+        let style = if is_cursor {
+            Style::new().bg(t.accent).fg(t.cursor_fg)
+        } else if !row.is_dir && sev.is_some() {
+            match sev.unwrap() {
+                1 => Style::new().fg(t.diag_error),
+                2 => Style::new().fg(t.diag_warn),
+                _ => Style::new().fg(t.fg),
+            }
+        } else if row.is_dir {
+            Style::new().fg(t.accent)
+        } else {
+            Style::new().fg(t.fg)
+        };
+        lines.push(Line::styled(label, style));
+        i += 1;
+    }
+    f.render_widget(Paragraph::new(lines), rect);
+}
+
+// -------------------------------------------------------------- problems ---
+
+fn draw_problems(f: &mut Frame, rect: Rect, app: &mut App) {
+    let t = app.theme;
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::TOP)
+        .border_style(Style::new().fg(t.gutter))
+        .style(Style::new().bg(t.status_bg));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let rows = app.problem_rows();
+    let rows_h = inner.height as usize;
+    crate::explorer::sync_scroll(app.problems_cursor, &mut app.problems_scroll, rows_h);
+    let mut lines = Vec::new();
+    let mut count = 0;
+    for (i, p) in rows.iter().enumerate().skip(app.problems_scroll) {
+        if count >= rows_h {
+            break;
+        }
+        let name = p.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let label = format!(" {}:{}:{} {} {} ", name, p.line_display + 1, p.col_u16,
+            match p.severity { 1 => "E", 2 => "W", _ => "i" }, p.msg);
+        let style = if app.problems_focus && i == app.problems_cursor {
+            Style::new().bg(t.accent).fg(t.cursor_fg)
+        } else {
+            match p.severity {
+                1 => Style::new().bg(t.status_bg).fg(t.diag_error),
+                2 => Style::new().bg(t.status_bg).fg(t.diag_warn),
+                _ => Style::new().bg(t.status_bg).fg(t.fg),
+            }
+        };
+        lines.push(Line::styled(label, style));
+        count += 1;
+    }
+    if rows.is_empty() {
+        lines.push(Line::styled(" sin problemas ✓", Style::new().bg(t.status_bg).fg(t.gutter)));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+// ------------------------------------------------------------ completión ---
+
+fn draw_completion(f: &mut Frame, pane: Rect, cursor_x: u16, cursor_y: u16, app: &mut App) {
+    let Some(p) = app.completion.as_ref() else { return };
+    let t = app.theme;
+    let max_w = pane.width.saturating_sub(1);
+    let width = p
+        .items
+        .iter()
+        .map(|i| i.label.chars().count() as u16)
+        .max()
+        .unwrap_or(1)
+        .clamp(8, max_w.max(8));
+    // height = items + 2 borders; bajo el cursor; si no cabe, arriba
+    let raw_h = (p.filtered.len() as u16).saturating_add(2).min(10);
+    let below = pane.y + pane.height - cursor_y;
+    let (y, h) = if below > raw_h {
+        (cursor_y + 1, raw_h)
+    } else if cursor_y >= raw_h && cursor_y >= pane.y + raw_h {
+        (cursor_y - raw_h, raw_h) // encima del cursor
+    } else {
+        (pane.y, raw_h.min(pane.height))
+    };
+    // x: a la derecha del cursor, clamp al pane
+    let x = (cursor_x).min(pane.x + pane.width.saturating_sub(width + 1)).max(pane.x);
+    let rect = Rect { x, y, width: width.min(max_w), height: h };
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::new().fg(t.gutter_active))
+        .style(Style::new().bg(t.bg));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let start = app.completion.as_ref().unwrap();
+    let mut lines = Vec::new();
+    for &idx in start.filtered.iter().skip(if start.cursor >= inner.height as usize { start.cursor + 1 - inner.height as usize } else { 0 }).take(inner.height as usize) {
+        let item = &start.items[idx];
+        let pos = start.filtered.iter().position(|&f| f == idx).unwrap_or(0);
+        let style = if pos == start.cursor {
+            Style::new().bg(t.accent).fg(t.cursor_fg)
+        } else {
+            Style::new().fg(t.fg)
+        };
+        lines.push(Line::styled(item.label.clone(), style));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_pane(

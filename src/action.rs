@@ -39,6 +39,13 @@ pub enum Action {
     CursorStyleNext,
     Hover,
     GotoDef,
+    ToggleExplorer,
+    TabNext,
+    TabPrev,
+    CloseBuffer,
+    ToggleProblems,
+    ToggleAi,
+    AiContext,
 }
 
 pub fn parse(id: &str) -> Option<Action> {
@@ -80,6 +87,13 @@ pub fn parse(id: &str) -> Option<Action> {
         "cursor_style_next" => Action::CursorStyleNext,
         "hover" => Action::Hover,
         "goto_definition" => Action::GotoDef,
+        "toggle_explorer" => Action::ToggleExplorer,
+        "tab_next" => Action::TabNext,
+        "tab_prev" => Action::TabPrev,
+        "close_buffer" => Action::CloseBuffer,
+        "toggle_problems" => Action::ToggleProblems,
+        "toggle_ai" => Action::ToggleAi,
+        "ai_context" => Action::AiContext,
         _ => return None,
     };
     Some(a)

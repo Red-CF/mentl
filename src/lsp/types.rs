@@ -266,6 +266,61 @@ fn loc_from(v: &Value) -> Vec<DefLocation> {
     vec![]
 }
 
+#[derive(Debug, Clone)]
+pub struct CompletionItem {
+    pub label: String,
+    pub kind: u32,
+    pub insert: String,
+}
+
+/// completion result tolerante: [item] | {items} | null.
+/// insert = insertText -> textEdit.newText -> label. Snippets RAW (deferred).
+pub fn parse_completion(result: &Value) -> Vec<CompletionItem> {
+    let items = match result {
+        Value::Array(a) => some_items(a),
+        Value::Object(_) => {
+            if result.get("isIncomplete").is_some() || result.get("items").is_some() {
+                some_items(
+                    result
+                        .get("items")
+                        .and_then(|i| i.as_array())
+                        .map(|a| a.as_ref())
+                        .unwrap_or(&[]),
+                )
+            } else {
+                vec![]
+            }
+        }
+        _ => vec![],
+    };
+    items
+}
+
+fn some_items(arr: &[Value]) -> Vec<CompletionItem> {
+    arr.iter()
+        .filter_map(|it| {
+            let label = match it.get("label") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Object(o)) => o.get("label")?.as_str()?.to_string(),
+                _ => return None,
+            };
+            let insert = it
+                .get("insertText")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .or_else(|| {
+                    it.get("textEdit")
+                        .and_then(|t| t.get("newText"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                })
+                .unwrap_or_else(|| label.clone());
+            let kind = it.get("kind").and_then(|k| k.as_u64()).unwrap_or(1) as u32;
+            Some(CompletionItem { label, kind, insert })
+        })
+        .collect()
+}
+
 // ------------------------------------------------------------- uri/path ---
 
 pub fn uri_to_path(uri: &str) -> Option<std::path::PathBuf> {

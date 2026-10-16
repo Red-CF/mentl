@@ -65,6 +65,10 @@ impl Default for Keys {
             ("leader K", "focus_up"), ("leader j", "focus_down"),
             ("leader f", "find_file"), ("leader c", "cursor_style_next"),
             ("leader k", "hover"), ("leader g", "goto_definition"),
+            ("leader e", "toggle_explorer"), ("leader n", "tab_next"),
+            ("leader p", "tab_prev"), ("leader d", "close_buffer"),
+            ("leader b", "toggle_problems"), ("leader i", "toggle_ai"),
+            ("leader a", "ai_context"),
         ]
         .into_iter()
         .map(|(k, v)| (k.into(), v.into()))
@@ -124,11 +128,46 @@ impl Default for LspCfg {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+pub struct UiCfg {
+    pub sidebar_width: u16,
+    pub panel_height: u16,
+    pub tabs: bool,
+    pub completion_debounce_ms: u64,
+}
+impl Default for UiCfg {
+    fn default() -> Self {
+        Self { sidebar_width: 24, panel_height: 6, tabs: true, completion_debounce_ms: 200 }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct AiCfg {
+    pub enabled: bool,
+    pub command: Vec<String>,
+    pub max_context_lines: usize,
+    pub timeout_secs: u64,
+}
+impl Default for AiCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            command: vec!["claude".into(), "--output-format".into(), "text".into()],
+            max_context_lines: 400,
+            timeout_secs: 120,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub editor: Editor,
     pub keys: Keys,
     pub theme: ThemeConfig,
     pub lsp: LspCfg,
+    pub ui: UiCfg,
+    pub ai: AiCfg,
 }
 
 impl Default for Config {
@@ -138,6 +177,8 @@ impl Default for Config {
             keys: Keys::default(),
             theme: ThemeConfig::default(),
             lsp: LspCfg::default(),
+            ui: UiCfg::default(),
+            ai: AiCfg::default(),
         }
     }
 }

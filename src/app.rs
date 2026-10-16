@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use unicode_segmentation::UnicodeSegmentation;
 use std::time::Instant;
 
 use crate::action::Action;
@@ -32,6 +33,8 @@ pub struct App {
     pub finder: Option<Finder>,
     /// rect del área completa de editor (lo pone el draw)
     pub last_area: ratatui::layout::Rect,
+    /// rect del área EDITOR (sidebar/tabs/panel fuera) para panes/focus/popups
+    pub last_editor_rect: ratatui::layout::Rect,
     pub cursor_style: CursorStyle,
     pub cursor_style_dirty: bool,
     pub config: Config,
@@ -61,10 +64,58 @@ pub struct App {
     pub def_wait: Option<(u64, (usize, usize), Instant)>,
     /// didChange debounce: path -> (último rev mandado, primera ed sin mandar)
     pub sync_state: HashMap<std::path::PathBuf, (u64, Option<Instant>)>,
+    // ------------------------------------------------------------ fase 3 ---
+    pub sidebar: Option<crate::explorer::Sidebar>,
+    pub sidebar_focus: bool,
+    pub project_root: PathBuf,
+    pub problems_open: bool,
+    pub problems_focus: bool,
+    pub problems_cursor: usize,
+    pub problems_scroll: usize,
+    /// popup de completion: items, filtrados(idx), cursor, prefijo len
+    pub completion: Option<CompletionPopup>,
+    pub completion_wait: Option<(u64, PathBuf, u64, Instant)>,
+    pub ai_ctx: Option<String>,
+    pub ai_jobs: Vec<AiJob>,
+}
+
+pub struct CompletionPopup {
+    pub items: Vec<lsp_types::CompletionItem>,
+    pub filtered: Vec<usize>,
+    pub cursor: usize,
+}
+
+/// Fila del problems panel.
+pub struct ProblemRow {
+    pub path: std::path::PathBuf,
+    pub line_u16: u32,
+    pub col_u16: u32,
+    pub line_display: usize,
+    pub severity: u32,
+    pub msg: String,
+}
+
+mod lsp_types {
+    pub use crate::lsp::types::CompletionItem;
+}
+
+pub struct AiJob {
+    pub rx: std::sync::mpsc::Receiver<std::io::Result<String>>,
+    pub started: Instant,
+    pub marker: (usize, usize), // línea, grapheme del "… thinking …"
+}
+
+#[derive(Clone, Copy)]
+pub enum WaitKind {
+    Hover,
+    Def,
+    Completion,
 }
 
 impl App {
     pub fn new(arg: Option<std::path::PathBuf>) -> Self {
+        let arg_ref = arg.clone();
+        let arg_dir = arg_ref.as_ref().filter(|p| p.is_dir()).cloned();
         let screen;
         let mut buffers = Vec::new();
         let mut picker = Vec::new();
@@ -116,7 +167,14 @@ impl App {
             buffers,
             panes: Panes::first(0),
             finder: None,
+            project_root: arg_dir
+                .clone()
+                .or_else(|| {
+                    arg_ref.as_ref().filter(|p| p.is_file()).and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                })
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
             last_area: Rect::new(0, 0, 80, 24),
+            last_editor_rect: Rect::new(0, 0, 80, 24),
             cursor_style: CursorStyle::parse(&config.editor.cursor_normal),
             cursor_style_dirty: true,
             config,
@@ -141,6 +199,16 @@ impl App {
             hover: None,
             def_wait: None,
             sync_state: HashMap::new(),
+            sidebar: None,
+            sidebar_focus: false,
+            problems_open: false,
+            problems_focus: false,
+            problems_cursor: 0,
+            problems_scroll: 0,
+            completion: None,
+            completion_wait: None,
+            ai_ctx: None,
+            ai_jobs: Vec::new(),
         };
         // arranca client si el buffer inicial es de un lenguaje LSP
         if app.screen == Screen::Editor {
@@ -165,32 +233,25 @@ impl App {
         &mut self.buffers[idx]
     }
 
+    /// Push o retarget: si el path ya está abierto, el pane activo apunta a
+    /// ese buffer (tab switch, sin didClose). Si no, push y retarget.
     pub fn open_in_pane(&mut self, path: &std::path::Path) -> Result<(), String> {
-        // abrir PRIMERO: si falla, no tocamos el server (sin didClose falso)
         let b = Buffer::open(path)?;
-        let old_path = self.buffer().path.clone();
-        let idx = self.active_buffer();
-        self.buffers[idx] = b;
-        // didClose solo si NINGÚN otro buffer sigue mostrando ese path
-        if let Some(old) = &old_path {
-            let still_open = self
-                .buffers
-                .iter()
-                .any(|bb| same_path(bb.path.as_ref(), Some(old)));
-            if !still_open {
-                if let Some(lang) = self.lsp.language_of(old) {
-                    let uri = lsp::types::path_to_uri(old);
-                    self.lsp.notify(lang, "textDocument/didClose", serde_json::json!({
-                        "textDocument": {"uri": uri}
-                    }));
-                    self.diagnostics.remove(old);
-                    self.sync_state.remove(old);
-                }
-            }
+        let new_path = b.path.clone();
+        // ya abierto en otro buffer? (comparación por slot distinto al activo)
+        if let Some(existing) = self.buffers.iter().position(|bb| {
+            !std::ptr::eq(bb, &self.buffers[self.active_buffer()])
+                && same_path(bb.path.as_ref(), Some(&path.to_path_buf()))
+        }) {
+            self.panes.panes[self.panes.active].buffer = existing;
+            self.follow_cursor();
+            return Ok(());
         }
-        let new_path = self.buffer().path.clone();
+        // el buffer del pane activo se queda vivo (es una tab)
+        let idx = self.buffers.len();
+        self.buffers.push(b);
+        self.panes.panes[self.panes.active].buffer = idx;
         if let Some(p) = new_path {
-            // arranca/asegura client para este lenguaje y manda didOpen
             let lang = self.lsp.language_of(&p);
             if let Some(lang) = lang {
                 self.lsp.ensure_client(lang, &self.config.lsp, self.config.lsp_server(lang));
@@ -198,6 +259,68 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Cierra el buffer del pane activo como tab: retarget de panes, renumber,
+    /// didClose solo si nadie lo muestra, limpieza de diagnósticos/sync.
+    pub fn close_buffer(&mut self) {
+        let idx = self.active_buffer();
+        let path = self.buffers[idx].path.clone();
+        // vecino para el foco: prev, sino next
+        let next = if idx > 0 { idx - 1 } else { idx + 1 };
+        // retarget de TODOS los panes que apunten a idx
+        for pane in self.panes.panes.iter_mut() {
+            if pane.buffer == idx {
+                if self.buffers.len() > 1 {
+                    pane.buffer = next.min(self.buffers.len() - 1);
+                    if pane.buffer >= idx {
+                        pane.buffer -= 1;
+                    }
+                }
+                // único buffer: se sustituye por uno vacío (sin renumber)
+            }
+        }
+        if self.buffers.len() == 1 {
+            self.buffers[0] = Buffer::empty(None);
+        } else {
+            self.buffers.remove(idx);
+            // renumber: todo buffer index > idx baja uno
+            for pane in self.panes.panes.iter_mut() {
+                if pane.buffer > idx {
+                    pane.buffer -= 1;
+                }
+            }
+        }
+        // didClose solo si el path no vive en otro buffer
+        if let Some(p) = path {
+            let still_open = self.buffers.iter().any(|bb| same_path(bb.path.as_ref(), Some(&p)));
+            if !still_open {
+                if let Some(lang) = self.lsp.language_of(&p) {
+                    let uri = lsp::types::path_to_uri(&p);
+                    self.lsp.notify(lang, "textDocument/didClose", serde_json::json!({
+                        "textDocument": {"uri": uri}
+                    }));
+                    self.diagnostics.remove(&p);
+                    self.sync_state.remove(&p);
+                }
+            }
+        }
+        self.follow_cursor();
+    }
+
+    /// Tab siguiente/anterior del buffer en el pane activo (wrap-around).
+    pub fn cycle_tab(&mut self, forward: bool) {
+        if self.buffers.len() <= 1 {
+            return;
+        }
+        let cur = self.active_buffer();
+        let len = self.buffers.len();
+        let target = match forward {
+            true => (cur + 1) % len,
+            false => (cur + len - 1) % len,
+        };
+        self.panes.panes[self.panes.active].buffer = target;
+        self.follow_cursor();
     }
 
     pub fn status_msg(&mut self, s: impl Into<String>) {
@@ -222,6 +345,8 @@ impl App {
             }
         }
         self.lsp_sync_tick();
+        self.completion_tick();
+        changed |= self.ai_tick();
         changed
     }
 
@@ -296,6 +421,12 @@ impl App {
     }
 
     /// Eventos LSP desde el hub. true = redibujar.
+    fn ldbg(&self, m: &str) {
+        if std::env::var("MENTL_LSP_DEBUG").is_ok() {
+            eprintln!("[app] {m}");
+        }
+    }
+
     pub fn on_lsp(&mut self) -> bool {
         let events = self.lsp.drain();
         let mut need = false;
@@ -341,7 +472,7 @@ impl App {
                                     Some(i) => self.buffers[i].pos_of_lsp(d.line, d.character),
                                     None => (d.line as usize, d.character as usize),
                                 };
-                                Diag { line, col, severity: d.severity, msg: d.msg }
+                                Diag { line, col, col_u16: d.character, severity: d.severity, msg: d.msg }
                             })
                             .collect();
                         self.diagnostics.insert(path, converted);
@@ -349,6 +480,25 @@ impl App {
                     }
                 }
                 LspEvent::Response { req_id, body } => {
+                    // completion en vuelo?
+                    let comp_hit = self
+                        .completion_wait
+                        .as_ref()
+                        .is_some_and(|(r, _, _, _)| *r != 0 && *r == req_id);
+                    if comp_hit {
+                        self.ldbg("completion response!");
+                        let (_, _, rev, _) = self.completion_wait.take().unwrap();
+                        self.completion_wait = None;
+                        if self.buffer().rev == rev && !self.buffer().ai {
+                            let items = lsp::types::parse_completion(&body);
+                            if !items.is_empty() {
+                                self.completion = Some(CompletionPopup { items, filtered: vec![], cursor: 0 });
+                                self.completion_refilter();
+                                need = true;
+                            }
+                        }
+                    }
+                    else {
                     // hover pendiente con este id?
                     let hover_hit = self.hover_wait.as_ref().is_some_and(|(r, _, _)| *r == req_id);
                     if hover_hit {
@@ -363,6 +513,7 @@ impl App {
                             self.goto_locations(locs, origin);
                             need = true;
                         }
+                    }
                     }
                 }
             }
@@ -472,11 +623,11 @@ impl App {
         self.panes.panes[self.panes.active].view.ensure_visible(l, &geo);
     }
 
-    /// Rects por pane (con last_area).
+    /// Rects por pane (área de editor: sidebar/tabs/panel fuera).
     pub fn pane_rects(&self) -> Vec<(usize, Rect)> {
         let mut out = Vec::new();
         let mut seps = Vec::new();
-        self.panes.layout(self.last_area, &mut out, &mut seps);
+        self.panes.layout(self.last_editor_rect, &mut out, &mut seps);
         out
     }
 
@@ -507,6 +658,27 @@ impl App {
         if self.screen == Screen::Picker {
             self.picker_key(k);
             return;
+        }
+        if self.sidebar_focus {
+            self.sidebar_key(k);
+            return;
+        }
+        if self.problems_focus {
+            self.problems_key(k);
+            return;
+        }
+        // popup de completion: intercepta ANTES del keymap (no crea chords);
+        // Esc cierra SOLO el popup, no sale de insert (difiere del bind Esc).
+        if self.mode == Mode::Insert && self.completion.is_some() {
+            use crossterm::event::KeyCode as K;
+            match k.code {
+                K::Up => return self.completion_move(-1),
+                K::Down => return self.completion_move(1),
+                K::Enter => return self.completion_accept(None),
+                K::Tab => return self.completion_accept(Some(0)),
+                K::Esc => return self.completion_close(),
+                _ => {}
+            }
         }
         if self.search_prompt {
             self.search_key(k);
@@ -576,6 +748,342 @@ impl App {
         }
     }
 
+    // -------------------------------------------------------------- fase 3 --
+
+    fn sidebar_key(&mut self, k: InputKey) {
+        use crossterm::event::KeyCode as K;
+        let Some(sb) = &mut self.sidebar else { return self.close_sidebar() };
+        match k.code {
+            K::Char('j') | K::Down => sb.move_cursor(1),
+            K::Char('k') | K::Up => sb.move_cursor(-1),
+            K::Char('l') | K::Right => {
+                if sb.rows.get(sb.cursor).is_some_and(|r| r.is_dir) {
+                    sb.toggle_row();
+                } else {
+                    self.sidebar_open_file();
+                    return;
+                }
+            }
+            K::Char('h') | K::Left => sb.collapse_or_parent(),
+            K::Enter => {
+                if sb.rows.get(sb.cursor).is_some_and(|r| r.is_dir) {
+                    sb.toggle_row();
+                } else {
+                    self.sidebar_open_file();
+                    return;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn sidebar_open_file(&mut self) {
+        let path = self
+            .sidebar
+            .as_ref()
+            .and_then(|s| s.rows.get(s.cursor))
+            .filter(|r| !r.is_dir)
+            .map(|r| r.path.clone());
+        if let Some(p) = path {
+            if let Err(e) = self.open_in_pane(&p) {
+                self.status_msg(e);
+            }
+        }
+        self.close_sidebar();
+    }
+
+    fn close_sidebar(&mut self) {
+        self.sidebar_focus = false;
+    }
+
+    fn problems_key(&mut self, k: InputKey) {
+        use crossterm::event::KeyCode as K;
+        let count = self.problem_rows().len();
+        if count == 0 {
+            return;
+        }
+        self.problems_cursor = self.problems_cursor.min(count - 1);
+        match k.code {
+            K::Char('j') | K::Down => self.problems_cursor += 1,
+            K::Char('k') | K::Up => self.problems_cursor = self.problems_cursor.saturating_sub(1),
+            K::Enter => {
+                let rows = self.problem_rows();
+                if let Some(p) = rows.get(self.problems_cursor) {
+                    let (path, line_u16, col_u16) = (p.path.clone(), p.line_u16, p.col_u16);
+                    if let Err(e) = self.open_in_pane(&path) {
+                        self.status_msg(e);
+                        return;
+                    }
+                    let (l, g) = self.buffer().pos_of_lsp(line_u16, col_u16);
+                    self.buffer().to(l, g);
+                }
+                self.problems_focus = false;
+            }
+            K::Esc => self.problems_focus = false,
+            _ => {}
+        }
+        let count = self.problem_rows().len();
+        self.problems_cursor = self.problems_cursor.min(count.saturating_sub(1));
+    }
+
+    /// Filas del problems panel: diagnósticos por (path, línea).
+    pub fn problem_rows(&self) -> Vec<ProblemRow> {
+        let mut out: Vec<ProblemRow> = Vec::new();
+        for (path, diags) in &self.diagnostics {
+            let path = path.clone();
+            for d in diags {
+                out.push(ProblemRow {
+                    path: path.clone(),
+                    line_u16: d.line as u32,
+                    col_u16: d.col_u16,
+                    line_display: d.line,
+                    severity: d.severity,
+                    msg: d.msg.clone(),
+                });
+            }
+        }
+        out.sort_by(|a, b| {
+            a.path.cmp(&b.path)
+                .then(a.line_display.cmp(&b.line_display))
+                .then(a.col_u16.cmp(&b.col_u16))
+        });
+        out
+    }
+
+    // ------------------------------------------------------------ completión --
+
+    fn completion_move(&mut self, d: isize) {
+        let Some(p) = self.completion.as_mut() else { return };
+        let n = p.filtered.len();
+        if n == 0 {
+            return;
+        }
+        let c = p.cursor as isize + d;
+        p.cursor = c.clamp(0, n as isize - 1) as usize;
+    }
+
+    fn completion_accept(&mut self, which: Option<usize>) {
+        let Some(p) = self.completion.as_ref() else { return };
+        let idx = which
+            .unwrap_or(p.cursor)
+            .min(p.filtered.len().saturating_sub(1));
+        let Some(&item_idx) = p.filtered.get(idx) else { return };
+        let insert = p.items[item_idx].insert.clone();
+        self.completion = None;
+        self.buffer().insert_text(&insert, "insert");
+        self.follow_cursor();
+        let _ = which;
+    }
+
+    fn completion_close(&mut self) {
+        self.completion = None;
+        self.completion_wait = None;
+    }
+
+    /// Refiltra el popup: prefijo = run de word-chars hacia atrás del cursor.
+    fn completion_refilter(&mut self) {
+        let (prefix, cur_g) = {
+            let b = self.buffer();
+            let text = b.line_text(b.cursor.0);
+            let (_, g) = b.cursor;
+            let start = (0..g)
+                .rev()
+                .find(|&i| {
+                    text.graphemes(true)
+                        .nth(i)
+                        .and_then(|x| x.chars().next())
+                        .map(crate::buffer::is_word)
+                        .unwrap_or(false)
+                })
+                .map_or(0usize, |i| i + 1);
+            let word_b = Buffer::grapheme_byte_of(&text, start);
+            let cut = Buffer::grapheme_byte_of(&text, g);
+            (text.get(word_b..cut).unwrap_or("").to_string(), g)
+        };
+        let Some(p) = self.completion.as_mut() else { return };
+        let _ = cur_g;
+        p.filtered = p
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| it.label.to_lowercase().contains(&prefix.to_lowercase()))
+            .map(|(i, _)| i)
+            .collect();
+        p.cursor = 0;
+        if p.filtered.is_empty() {
+            self.completion_close();
+        }
+    }
+
+    fn trigger_completion(&mut self) {
+        self.ldbg("trigger");
+        if self.completion_wait.is_some() {
+            return;
+        }
+        let Some(path) = self.buffer().path.clone() else { return };
+        let Some(lang) = self.lsp.language_of(&path) else { return };
+        if !self.lsp.is_ready(lang) {
+            return;
+        }
+        let rev = self.buffer().rev;
+        self.completion_wait = Some((0, path, rev, Instant::now())); // 0 = sin mandar
+    }
+
+    /// 0 = pendiente de enviar: cuando pasa el debounce y el estado sigue
+    /// vivo, manda la request. Con req real: nada (la respuesta llega en
+    /// on_lsp y ahí se consuma).
+    fn completion_tick(&mut self) {
+        if std::env::var("MENTL_LSP_DEBUG").is_ok() && self.completion_wait.is_some() { eprintln!("[app] comp tick"); }
+        let Some((req, path, rev, since)) = self.completion_wait.clone() else { return };
+        if self.mode != Mode::Insert {
+            self.completion_close();
+            return;
+        }
+        if req != 0 {
+            return;
+        }
+        let debounce = std::time::Duration::from_millis(self.config.ui.completion_debounce_ms);
+        if since.elapsed() < debounce {
+            return;
+        }
+        if !same_path(Some(&path), self.buffer().path.as_ref()) || self.buffer().rev != rev {
+            self.completion_close();
+            return;
+        }
+        let Some(lang) = self.lsp.language_of(&path) else {
+            self.completion_close();
+            return;
+        };
+        let (l, g) = self.buffer().cursor;
+        let (ll, col) = self.buffer().lsp_pos_of(l, g);
+        let params = serde_json::json!({
+            "textDocument": {"uri": lsp::types::path_to_uri(&path)},
+            "position": {"line": ll, "character": col},
+        });
+        match self.lsp.request(lang, "textDocument/completion", params) {
+            Some(wire) => self.completion_wait = Some((wire, path, rev, since)),
+            None => self.completion_wait = None,
+        }
+    }
+
+    // ------------------------------------------------------------------ AI --
+
+    fn ai_toggle(&mut self) {
+        // el pane activo ya muestra AI? -> ciérralo
+        if self.buffer().ai {
+            let _ = self.panes.close();
+            self.follow_cursor();
+            return;
+        }
+        self.panes.split(Dir::Horiz);
+        let idx = self.buffers.len();
+        self.buffers.push(Buffer::ai());
+        self.panes.panes[self.panes.active].buffer = idx;
+        self.mode = Mode::Insert;
+        self.cursor_style_dirty = true;
+    }
+
+    fn ai_context(&mut self) {
+        let path = self.buffer().path.clone();
+        let Some(p) = path else {
+            self.status_msg("buffer sin archivo para contexto");
+            return;
+        };
+        let max = self.config.ai.max_context_lines;
+        let content = self
+            .buffer()
+            .rope
+            .lines()
+            .take(max)
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("");
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        self.ai_ctx = Some(format!("Archivo: {}\n```\n{content}\n```", p.display()));
+        self.status_msg(format!("ctx: {name} (máx {max} líneas)"));
+    }
+
+    /// Enter en insert-mode sobre un pane AI = manda el prompt (línea actual).
+    fn ai_submit(&mut self) {
+        let (line, _) = self.buffer().cursor;
+        let prompt = self.buffer().line_text(line).trim().to_string();
+        if prompt.is_empty() || prompt.starts_with("▸") || prompt.starts_with("…") {
+            return;
+        }
+        if let Some(job) = self.ai_jobs.last() {
+            let _ = job; // hay un job en vuelo — espera respuesta
+            return;
+        }
+        let ctx = self.ai_ctx.take();
+        let final_prompt = match ctx {
+            Some(c) => format!("{c}\n\n{prompt}"),
+            None => prompt.clone(),
+        };
+        let cmd = self.config.ai.command.clone();
+        let timeout = std::time::Duration::from_secs(self.config.ai.timeout_secs);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = std::thread::Builder::new()
+            .name("ai-job".into())
+            .spawn(move || ai_run(cmd, final_prompt, timeout, tx));
+        // transcript: bloque de prompt + marcador pendiente en el EOF
+        self.buffer().file_end();
+        self.buffer().insert_text(&format!("\n▸ {prompt}\n"), "insert");
+        self.buffer().file_end();
+        self.buffer().insert_text("\n… thinking …", "insert");
+        self.buffer().file_end();
+        let marker = self.buffer().cursor;
+        self.ai_jobs.push(AiJob { rx, started: Instant::now(), marker });
+    }
+
+    fn replace_marker_line(&mut self, line: usize, text: &str) {
+        let b = self.buffer();
+        let len_lines = b.len_lines();
+        let start = b.rope.line_to_char(line.min(len_lines.saturating_sub(1)));
+        let end = b
+            .rope
+            .line_to_char((line + 1).min(len_lines))
+            .min(b.rope.len_chars());
+        b.rope.remove(start..end);
+        b.insert_text(&format!("\n{text}\n"), "insert");
+        b.file_end();
+        b.modified = true;
+    }
+
+    /// Drena respuestas de jobs AI (tick). true = redibujar.
+    fn ai_tick(&mut self) -> bool {
+        let mut changed = false;
+        let timeout = std::time::Duration::from_secs(self.config.ai.timeout_secs);
+        for job in std::mem::take(&mut self.ai_jobs) {
+            match job.rx.try_recv() {
+                Ok(Ok(body)) => {
+                    self.replace_marker_line(job.marker.0, &body.trim_end());
+                    self.status_msg("ai: respuesta lista");
+                    changed = true;
+                }
+                Ok(Err(e)) => {
+                    self.replace_marker_line(job.marker.0, &format!("✖ {e}"));
+                    self.status_msg(format!("ai: {e}"));
+                    changed = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    if job.started.elapsed() > timeout {
+                        self.replace_marker_line(job.marker.0, "✖ timeout");
+                        changed = true;
+                    } else {
+                        self.ai_jobs.push(job); // sigue esperando
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    if job.started.elapsed() > timeout {
+                        self.replace_marker_line(job.marker.0, "✖ sin respuesta");
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
     fn search_key(&mut self, k: InputKey) {
         use crossterm::event::KeyCode as K;
         match k.code {
@@ -601,10 +1109,24 @@ impl App {
     fn insert_key(&mut self, k: InputKey) {
         use crossterm::event::KeyCode as K;
         match (k.code, k.ctrl) {
+            (K::Enter, _) => {
+                if self.buffer().ai {
+                    self.ai_submit();
+                } else {
+                    self.buffer().insert_text("\n", "insert");
+                    self.trigger_completion();
+                }
+            }
             (K::Char(c), false) => {
                 self.buffer().insert_text(&c.to_string(), "insert");
+                if self.buffer().ai {
+                    // transcript: no completions
+                } else if self.completion.is_some() {
+                    self.completion_refilter();
+                } else {
+                    self.trigger_completion();
+                }
             }
-            (K::Enter, _) => self.buffer().insert_text("\n", "insert"),
             (K::Tab, _) => {
                 let w = self.config.editor.tab_width;
                 self.buffer().insert_text(&" ".repeat(w), "insert");
@@ -685,7 +1207,8 @@ impl App {
                 Err(e) => self.status_msg(e),
             },
             Quit => {
-                if self.quit_pending || self.buffers.iter().all(|b| !b.modified) {
+                let persistent_dirty = self.buffers.iter().any(|b| b.is_persistent() && b.modified);
+                if self.quit_pending || !persistent_dirty {
                     self.quit = true;
                 } else {
                     self.quit_pending = true;
@@ -719,6 +1242,24 @@ impl App {
             }
             Hover => self.lsp_request_at_cursor(HoverOrDef::Hover),
             GotoDef => self.lsp_request_at_cursor(HoverOrDef::Def),
+            ToggleExplorer => {
+                if self.sidebar.is_some() {
+                    self.sidebar = None;
+                    self.sidebar_focus = false;
+                } else {
+                    self.sidebar = Some(crate::explorer::Sidebar::new(self.project_root.clone()));
+                    self.sidebar_focus = true;
+                }
+            }
+            TabNext => self.cycle_tab(true),
+            TabPrev => self.cycle_tab(false),
+            CloseBuffer => self.close_buffer(),
+            ToggleProblems => {
+                self.problems_open = !self.problems_open;
+                self.problems_focus = self.problems_open;
+            }
+            ToggleAi => self.ai_toggle(),
+            AiContext => self.ai_context(),
         }
         self.follow_cursor();
     }
@@ -854,6 +1395,76 @@ pub fn same_path(a: Option<&PathBuf>, b: Option<&PathBuf>) -> bool {
         }
         _ => false,
     }
+}
+
+/// Corre el comando AI en threads: lector de stdout + watchdog de timeout.
+/// Nunca bloquea el main loop; el kill del watchdog cierra stdout y el
+/// lector termina.
+fn ai_run(
+    cmd: Vec<String>,
+    prompt: String,
+    timeout: std::time::Duration,
+    tx: std::sync::mpsc::Sender<std::io::Result<String>>,
+) {
+    use std::process::Stdio;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    if cmd.is_empty() {
+        let _ = tx.send(Err(std::io::Error::other("[ai] sin command")));
+        return;
+    }
+    let child = match std::process::Command::new(&cmd[0])
+        .args(&cmd[1..])
+        .arg(&prompt)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = tx.send(Err(e));
+            return;
+        }
+    };
+    let killed = Arc::new(AtomicBool::new(false));
+    let child_shared = Arc::new(Mutex::new(child));
+
+    // watchdog: mata pasado el timeout
+    let w_child = Arc::clone(&child_shared);
+    let w_killed = Arc::clone(&killed);
+    std::thread::spawn(move || {
+        std::thread::sleep(timeout);
+        w_killed.store(true, Ordering::SeqCst);
+        if let Ok(mut c) = w_child.lock() {
+            let _ = c.kill();
+        }
+    });
+
+    // lector: stdout hasta EOF
+    let mut stdout = child_shared.lock().unwrap().stdout.take().expect("stdout");
+    let mut buf = String::new();
+    let mut io_err: Option<std::io::Error> = None;
+    {
+        use std::io::Read;
+        let mut chunk = [0u8; 8192];
+        loop {
+            match stdout.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => buf.push_str(&String::from_utf8_lossy(&chunk[..n])),
+                Err(e) => {
+                    io_err = Some(e);
+                    break;
+                }
+            }
+        }
+    }
+    let _ = child_shared.lock().unwrap().wait();
+    let _ = tx.send(match (io_err, killed.load(Ordering::SeqCst)) {
+        (Some(e), _) => Err(e),
+        (None, true) => Err(std::io::Error::other("timeout")),
+        (None, false) => Ok(buf),
+    });
 }
 
 /// Todos los matches de `pat` en `text` como rangos de bytes. smart-case:

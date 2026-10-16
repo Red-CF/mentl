@@ -118,3 +118,25 @@ fn framing_content_length() {
     assert_eq!(v["method"], "test/unicode");
     assert_eq!(v["params"]["x"], "héllo 😀");
 }
+#[test]
+fn completion_roundtrip() {
+    let mut h = hub();
+    let (cfg, server) = mock_cfg();
+    h.ensure_client("rust", &cfg, Some(&server));
+    wait_event(&h, 3000, |e| matches!(e, LspEvent::Started { lang: "rust" }))
+        .expect("mock arranca");
+    h.mark_ready("rust");
+    let req = h
+        .request("rust", "textDocument/completion", serde_json::json!({
+            "textDocument": {"uri": "file:///mock.rs"},
+            "position": {"line": 0, "character": 0},
+        }))
+        .expect("request listo");
+    let resp = wait_event(&h, 3000, |e| matches!(e, LspEvent::Response { req_id, .. } if *req_id == req))
+        .expect("completion response");
+    let LspEvent::Response { body, .. } = resp else { unreachable!() };
+    let items = lsp::types::parse_completion(&body);
+    assert_eq!(items.len(), 3, "{items:?}");
+    assert_eq!(items[0].insert, "mock_fn(x)", "insertText gana a label");
+    assert_eq!(items[1].insert, "mock_var: u32 = 1");
+}

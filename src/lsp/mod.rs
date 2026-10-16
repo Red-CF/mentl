@@ -15,6 +15,7 @@ use crate::config::{LspCfg, ServerCfg};
 pub struct Diag {
     pub line: usize,       // 0-based
     pub col: usize,        // graphemes (ya convertida desde UTF-16 al ingest)
+    pub col_u16: u32,      // crudo UTF-16 (salto a archivo no abierto)
     pub severity: u32,     // 1 error 2 warn 3 info 4 hint
     pub msg: String,
 }
