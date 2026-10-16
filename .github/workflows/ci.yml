@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # dependency CVE gate: Cargo.lock contra RustSec. deny-warnings=false:
+  # avisos de unmaintained no ponen la CI roja; solo vulnerabilities reales
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          deny-warnings: false
+
+  # lint gate: cero warnings permitido (el repo hoy lo cumple; evita el rot)
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --all-targets -- -D warnings
+
+  coverage:
+    # coverage en su propio named check: tests instrumentados en Linux +
+    # badge en gh-pages desde main. Linux queda cubierto aquí (no en test) —
+    # test va a macos/windows solamente.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov
+          cargo llvm-cov --lcov --output-path lcov.info
+      - name: update gh-pages badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PCT=$(awk -F: '/^LF:/{lf+=$2}/^LH:/{lh+=$2}END{printf "%.0f", 100*lh/(lf?lf:1)}' lcov.info)
+          COLOR=$([ "$PCT" -ge 90 ] && echo 44cc11 || ([ "$PCT" -ge 75 ] && echo 97ca00 || echo dfb317))
+          printf '<svg xmlns="http://www.w3.org/2000/svg" width="108" height="20"><rect width="108" height="20" rx="3" fill="#%s"/><text x="54" y="14" font-size="11" font-family="Verdana,sans-serif" fill="#fff" text-anchor="middle">coverage %s%%</text></svg>\n' "$COLOR" "$PCT" > coverage.svg
+          URL="https://x-access-token:${GH_TOKEN}@github.com/Red-CF/mentl.git"
+          git clone -q --depth=1 --branch=gh-pages "$URL" ghp \
+            || { mkdir ghp && git -C ghp init -q -b gh-pages && git -C ghp remote add origin "$URL"; }
+          mv coverage.svg ghp/coverage.svg
+          git -C ghp -c user.name=Red-CF -c user.email=crojasfer31@gmail.com add coverage.svg
+          git -C ghp -c user.name=Red-CF -c user.email=crojasfer31@gmail.com commit -q -m "coverage badge: $PCT%" --allow-empty
+          git -C ghp push -q origin gh-pages
+
+  test:
+    # contrato por plataforma: raw mode/eventos y fs se portan distinto por OS;
+    # los tests de pty/clipboard están hechos con TestBackend/registro para
+    # correr offline en cualquier runner. Linux corre dentro de `coverage`.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
+
+  build:
+    # release build en las variantes de plataforma que usará el usuario.
+    # mac 3 formas: runner ARM nativo + cross x86_64 (como log-cardio).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux-X64
+          - os: ubuntu-24.04-arm
+            name: Linux-ARM64
+          - os: macos-latest
+            name: macOS-ARM64
+          - os: windows-latest
+            name: Windows-X64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: also build macOS Intel (el runner es ARM)
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mv target/x86_64-apple-darwin/release/mentl mentl-macOS-X64
+          # universal2: fat binary ARM+Intel
+          mv target/release/mentl mentl-macOS-ARM64
+          lipo -create mentl-macOS-ARM64 mentl-macOS-X64 -output mentl-macOS-Universal
+      - name: stage named binary
+        shell: bash
+        run: |
+          EXT=$([ "$RUNNER_OS" = "Windows" ] && echo .exe || echo "")
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ls -la mentl-macOS-*   # ARM64/X64/Universal ya con nombre
+          else
+            mv "target/release/mentl$EXT" "mentl-${{ matrix.name }}$EXT"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mentl-${{ matrix.name }}
+          path: mentl-*
