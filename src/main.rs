@@ -60,8 +60,11 @@ fn run(
             break;
         }
 
-        // drena TODOS los eventos pendientes antes del próximo draw
-        while event::poll(Duration::from_millis(120))? {
+        // drena eventos: con draw pendiente, poll(0) — latencia de tecla ~0.
+        // Con todo idle, 120ms para el tick. key-repeat se agrupa en 1 draw.
+        let idle = Duration::from_millis(120);
+        let now = Duration::from_millis(0);
+        while event::poll(if need_draw { now } else { idle })? {
             match event::read()? {
                 Event::Key(k) => {
                     if let Some(k) = mentl::input::InputKey::from_event(k) {
