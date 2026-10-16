@@ -49,6 +49,8 @@ impl Default for Keys {
         let normal = [
             ("h", "cursor_left"), ("j", "cursor_down"), ("k", "cursor_up"),
             ("l", "cursor_right"), ("w", "word_next"), ("b", "word_prev"),
+            ("Up", "cursor_up"), ("Down", "cursor_down"),
+            ("Left", "cursor_left"), ("Right", "cursor_right"),
             ("0", "line_start"), ("$", "line_end"),
             ("g g", "file_start"), ("G", "file_end"),
             ("i", "insert_mode"), ("I", "insert_line_start"), ("A", "insert_line_end"),
