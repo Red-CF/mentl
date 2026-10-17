@@ -33,17 +33,22 @@ pub fn build(app: &mut App, width: usize) -> Line<'static> {
     let name = app.buffer().display_name();
     let modified = if app.buffer().modified { " [+]" } else { "" };
     let name_span = format!(" {name}{modified} ");
-    spans.push(Span::styled(name_span, Style::new().bg(t.status_bg).fg(t.fg)));
+    spans.push(Span::styled(
+        name_span,
+        Style::new().bg(t.status_bg).fg(t.fg),
+    ));
 
     // chips de diagnósticos + estado lsp (spans coloreados aparte)
     let path = app.buffer().path.clone();
     let (nd_err, nd_warn) = path
         .as_ref()
         .and_then(|p| app.diagnostics.get(p))
-        .map(|ds| (
-            ds.iter().filter(|d| d.severity == 1).count(),
-            ds.iter().filter(|d| d.severity == 2).count(),
-        ))
+        .map(|ds| {
+            (
+                ds.iter().filter(|d| d.severity == 1).count(),
+                ds.iter().filter(|d| d.severity == 2).count(),
+            )
+        })
         .unwrap_or((0, 0));
     let diag_chip = match (nd_err, nd_warn) {
         (0, 0) => String::new(),
@@ -66,7 +71,10 @@ pub fn build(app: &mut App, width: usize) -> Line<'static> {
         spans.push(Span::styled(format!("{diag_chip} "), style));
     }
     if !lsp_chip.is_empty() {
-        spans.push(Span::styled(format!("{lsp_chip} "), Style::new().bg(t.status_bg).fg(t.gutter)));
+        spans.push(Span::styled(
+            format!("{lsp_chip} "),
+            Style::new().bg(t.status_bg).fg(t.gutter),
+        ));
     }
 
     if !center.is_empty() {
@@ -82,8 +90,10 @@ pub fn build(app: &mut App, width: usize) -> Line<'static> {
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
     let pad = width.saturating_sub(used + right.width());
     spans.push(Span::styled(" ".repeat(pad), Style::new().bg(t.status_bg)));
-    spans.push(Span::styled(right, Style::new().bg(t.status_bg).fg(t.gutter)));
+    spans.push(Span::styled(
+        right,
+        Style::new().bg(t.status_bg).fg(t.gutter),
+    ));
 
     Line::from(spans).style(Style::new().bg(t.status_bg))
 }
-

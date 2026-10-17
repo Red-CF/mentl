@@ -2,8 +2,8 @@
 //! Cerrar = el split padre pasa a ser el hermano. Nodos huérfanos quedan en
 //! Vec sin referencia — nunca se alcanzan ni compactan.
 
-use ratatui::layout::Rect;
 use crate::view::View;
+use ratatui::layout::Rect;
 
 pub type PaneId = usize;
 pub type NodeId = usize;
@@ -36,7 +36,10 @@ pub struct Panes {
 impl Panes {
     pub fn first(buffer_idx: usize) -> Self {
         Self {
-            panes: vec![Pane { buffer: buffer_idx, view: View::default() }],
+            panes: vec![Pane {
+                buffer: buffer_idx,
+                view: View::default(),
+            }],
             nodes: vec![Node::Leaf(0)],
             root: 0,
             active: 0,
@@ -52,14 +55,22 @@ impl Panes {
     pub fn split(&mut self, dir: Dir) {
         let buffer = self.panes[self.active].buffer;
         let new_pane = self.panes.len();
-        self.panes.push(Pane { buffer, view: View::default() });
+        self.panes.push(Pane {
+            buffer,
+            view: View::default(),
+        });
         let lhs_leaf = self.nodes.len(); // leaf que conserva el pane actual
         self.nodes.push(Node::Leaf(self.active));
         let rhs_leaf = self.nodes.len(); // leaf del pane nuevo
         self.nodes.push(Node::Leaf(new_pane));
-        let old_leaf = self.leaf_of(self.root, self.active)
+        let old_leaf = self
+            .leaf_of(self.root, self.active)
             .expect("pane activo debe tener leaf en el árbol");
-        self.nodes[old_leaf] = Node::Split { dir, lhs: lhs_leaf, rhs: rhs_leaf };
+        self.nodes[old_leaf] = Node::Split {
+            dir,
+            lhs: lhs_leaf,
+            rhs: rhs_leaf,
+        };
         self.active = new_pane;
     }
 
@@ -86,7 +97,8 @@ impl Panes {
             self.root = sibling;
         } else {
             // el abuelo apunta al sibling en el lado correspondiente
-            let (grand, g_side) = self.parent_of(self.root, parent)
+            let (grand, g_side) = self
+                .parent_of(self.root, parent)
                 .expect("parent tiene padre si no es root");
             self.relink(grand, g_side, sibling);
         }
@@ -112,9 +124,9 @@ impl Panes {
         match &self.nodes[node] {
             Node::Leaf(p) if *p == pane => Some(node),
             Node::Leaf(_) => None,
-            Node::Split { lhs, rhs, .. } => {
-                self.leaf_of(*lhs, pane).or_else(|| self.leaf_of(*rhs, pane))
-            }
+            Node::Split { lhs, rhs, .. } => self
+                .leaf_of(*lhs, pane)
+                .or_else(|| self.leaf_of(*rhs, pane)),
         }
     }
 
@@ -127,7 +139,8 @@ impl Panes {
             if *rhs == target {
                 return Some((node, true));
             }
-            return self.parent_of(*lhs, target)
+            return self
+                .parent_of(*lhs, target)
                 .or_else(|| self.parent_of(*rhs, target));
         }
         None
@@ -143,11 +156,22 @@ impl Panes {
 
     /// Rects por pane en orden; además emite separadores (línea frontera) en
     /// cada split para que draw los pinte.
-    pub fn layout(&self, area: Rect, out: &mut Vec<(PaneId, Rect)>, seps: &mut Vec<(Dir, u16, Rect)>) {
+    pub fn layout(
+        &self,
+        area: Rect,
+        out: &mut Vec<(PaneId, Rect)>,
+        seps: &mut Vec<(Dir, u16, Rect)>,
+    ) {
         self.layout_node(self.root, area, out, seps);
     }
 
-    fn layout_node(&self, node: NodeId, rect: Rect, out: &mut Vec<(PaneId, Rect)>, seps: &mut Vec<(Dir, u16, Rect)>) {
+    fn layout_node(
+        &self,
+        node: NodeId,
+        rect: Rect,
+        out: &mut Vec<(PaneId, Rect)>,
+        seps: &mut Vec<(Dir, u16, Rect)>,
+    ) {
         match &self.nodes[node] {
             Node::Leaf(p) => out.push((*p, rect)),
             Node::Split { dir, lhs, rhs } => match dir {
@@ -172,7 +196,10 @@ impl Panes {
     fn split_rect(rect: Rect, dir: Dir) -> (Rect, Rect) {
         match dir {
             Dir::Vert => (
-                Rect { width: rect.width / 2, ..rect },
+                Rect {
+                    width: rect.width / 2,
+                    ..rect
+                },
                 Rect {
                     x: rect.x + rect.width / 2,
                     width: rect.width - rect.width / 2,
@@ -180,7 +207,10 @@ impl Panes {
                 },
             ),
             Dir::Horiz => (
-                Rect { height: rect.height / 2, ..rect },
+                Rect {
+                    height: rect.height / 2,
+                    ..rect
+                },
                 Rect {
                     y: rect.y + rect.height / 2,
                     height: rect.height - rect.height / 2,

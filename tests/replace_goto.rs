@@ -1,9 +1,9 @@
 //! fase 4: replace-all, goto-line, bracket, clipboard.
 
-use std::path::PathBuf;
 use crossterm::event::KeyCode;
 use mentl::app::App;
 use mentl::input::InputKey;
+use std::path::PathBuf;
 
 fn key(s: &str) -> InputKey {
     InputKey::parse(s).unwrap()
@@ -58,7 +58,11 @@ fn replace_smart_case_y_vacio() {
         app.on_key(k(KeyCode::Char(c)));
     }
     app.on_key(k(KeyCode::Enter));
-    assert_eq!(app.buffer().line_text(0), "z z z", "case-insensitive (pattern sin mayús)");
+    assert_eq!(
+        app.buffer().line_text(0),
+        "z z z",
+        "case-insensitive (pattern sin mayús)"
+    );
     // patrón vacío: no-op
     app.on_key(key("space"));
     app.on_key(key("r"));

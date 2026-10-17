@@ -186,7 +186,11 @@ impl Buffer {
         if c >= self.rope.len_chars() {
             return None;
         }
-        self.rope.slice(c..c + 1).chunks().next().and_then(|s| s.chars().next())
+        self.rope
+            .slice(c..c + 1)
+            .chunks()
+            .next()
+            .and_then(|s| s.chars().next())
     }
 
     /// Char offset del rope donde empieza el grapheme `gidx` de la línea.
@@ -223,10 +227,7 @@ impl Buffer {
 
     /// grapheme idx dentro de `text` para un byte offset en boundary.
     pub fn byte_to_grapheme(text: &str, byte: usize) -> usize {
-        text.get(..byte)
-            .unwrap_or(text)
-            .graphemes(true)
-            .count()
+        text.get(..byte).unwrap_or(text).graphemes(true).count()
     }
 
     // ------------------------------------------------------------- cursor --
@@ -254,8 +255,7 @@ impl Buffer {
     pub fn next_grapheme_char_at_cursor(&self) -> Option<char> {
         self.line_text(self.cursor.0)
             .graphemes(true)
-            .skip(self.cursor.1 + 1)
-            .next()
+            .nth(self.cursor.1 + 1)
             .and_then(|g| g.chars().next())
     }
 
@@ -292,7 +292,9 @@ impl Buffer {
 
     fn word_back_from(&self, line: usize, from: usize) -> Option<usize> {
         let flags = self.word_flags(line);
-        (0..from).rev().find(|&j| flags[j] && (j == 0 || !flags[j - 1]))
+        (0..from)
+            .rev()
+            .find(|&j| flags[j] && (j == 0 || !flags[j - 1]))
     }
 
     pub fn word_next(&mut self) {
@@ -526,7 +528,8 @@ impl Buffer {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let f = File::create(&path).map_err(|e| e.to_string())?;
-        self.rope.write_to(BufWriter::new(f))
+        self.rope
+            .write_to(BufWriter::new(f))
             .map_err(|e| e.to_string())?;
         self.modified = false;
         Ok(())
@@ -746,7 +749,12 @@ impl Buffer {
     /// Rango en chars del rope para (min, max) de líneas/graphemes.
     /// Line-kind incluye el newline cola; última línea sin newline hasta el
     /// final del documento.
-    pub fn sel_chars(&self, min: (usize, usize), max: (usize, usize), line_kind: bool) -> (usize, usize) {
+    pub fn sel_chars(
+        &self,
+        min: (usize, usize),
+        max: (usize, usize),
+        line_kind: bool,
+    ) -> (usize, usize) {
         if line_kind {
             let c0 = self.rope.line_to_char(min.0);
             let c1 = if max.0 + 1 < self.len_lines() {
@@ -760,6 +768,40 @@ impl Buffer {
             let c1 = self.grapheme_char(max.0, max.1);
             (c0.min(c1), c0.max(c1))
         }
+    }
+}
+
+/// Indent detection: mayoría entre tabs y patrones de espacios (≤200 líneas).
+fn detect_indent(rope: &Rope, fallback: usize) -> IndentKind {
+    let mut tabs = 0usize;
+    let mut spaces2 = 0;
+    let mut spaces4 = 0;
+    for line in rope.lines().take(200) {
+        let s: String = line.chunks().collect();
+        let lead_len = s.len() - s.trim_start().len();
+        let lead: &str = &s[..lead_len];
+        match lead.chars().next() {
+            Some('\t') => tabs += 1,
+            Some(' ') => {
+                // run de espacios: mide el prefijo común (2/4 en múltiplos)
+                match lead.chars().count() {
+                    n if n % 4 == 0 && n > 0 => spaces4 += 1,
+                    n if n % 2 == 0 && n > 0 => spaces2 += 1,
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    let best_spaces = spaces4.max(spaces2);
+    if tabs >= best_spaces && tabs > 0 {
+        IndentKind::Tabs
+    } else if spaces4 > 0 && spaces4 >= spaces2 {
+        IndentKind::Spaces(4)
+    } else if spaces2 > 0 {
+        IndentKind::Spaces(2)
+    } else {
+        IndentKind::Spaces(fallback)
     }
 }
 
@@ -856,7 +898,10 @@ mod tests {
             }
         }
         // fuera de rango clampa
-        assert_eq!(b.pos_of_lsp(99, 99), (b.len_lines() - 1, b.line_len(b.len_lines() - 1)));
+        assert_eq!(
+            b.pos_of_lsp(99, 99),
+            (b.len_lines() - 1, b.line_len(b.len_lines() - 1))
+        );
         assert_eq!(b.lsp_pos_of(0, 999).1 as usize, b.line_utf16_len(0));
     }
 
@@ -897,39 +942,5 @@ mod tests {
         assert_eq!(b.rev, r0 + 2);
         b.undo();
         assert_eq!(b.rev, r0 + 3, "undo también muta (didChange)");
-    }
-}
-
-/// Indent detection: mayoría entre tabs y patrones de espacios (≤200 líneas).
-fn detect_indent(rope: &Rope, fallback: usize) -> IndentKind {
-    let mut tabs = 0usize;
-    let mut spaces2 = 0;
-    let mut spaces4 = 0;
-    for line in rope.lines().take(200) {
-        let s: String = line.chunks().collect();
-        let lead_len = s.len() - s.trim_start().len();
-        let lead: &str = &s[..lead_len];
-        match lead.chars().next() {
-            Some('\t') => tabs += 1,
-            Some(' ') => {
-                // run de espacios: mide el prefijo común (2/4 en múltiplos)
-                match lead.chars().count() {
-                    n if n % 4 == 0 && n > 0 => spaces4 += 1,
-                    n if n % 2 == 0 && n > 0 => spaces2 += 1,
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    }
-    let best_spaces = spaces4.max(spaces2);
-    if tabs >= best_spaces && tabs > 0 {
-        IndentKind::Tabs
-    } else if spaces4 > 0 && spaces4 >= spaces2 {
-        IndentKind::Spaces(4)
-    } else if spaces2 > 0 {
-        IndentKind::Spaces(2)
-    } else {
-        IndentKind::Spaces(fallback)
     }
 }

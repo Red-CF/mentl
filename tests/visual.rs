@@ -1,11 +1,11 @@
 //! fase 4: visual mode y ops de rango.
 
-use std::path::PathBuf;
 use crossterm::event::KeyCode;
 use mentl::app::App;
 use mentl::buffer::SelKind;
 use mentl::input::InputKey;
 use mentl::keymap::Mode;
+use std::path::PathBuf;
 
 fn key(s: &str) -> InputKey {
     InputKey::parse(s).expect("token de test")
@@ -34,13 +34,17 @@ fn visual_selection_normalizada_y_delete() {
     app.buffer().to(0, 2); // 'o' de "uno"
     app.on_key(key("v"));
     app.on_key(key("0")); // hacia atrás
-    
+
     assert_eq!(app.mode, Mode::Visual);
     let sel = app.selection.expect("sel");
     assert_eq!(sel.kind, SelKind::Char);
     app.on_key(key("d"));
     assert_eq!(app.mode, Mode::Normal);
-    assert_eq!(app.buffer().line_text(0), "o", "selección normalizada hacia atrás");
+    assert_eq!(
+        app.buffer().line_text(0),
+        "o",
+        "selección normalizada hacia atrás"
+    );
     assert_eq!(app.buffer().line_text(1), "dos");
     drop(app);
     let _ = std::fs::remove_file(p);
@@ -80,8 +84,13 @@ fn visual_con_emoji_no_rompe_grafos_y_crlf_no_duplica() {
     app.on_key(key("$"));
     app.on_key(key("d"));
     // resultado: la línea 1 quedó vacía? — head $ = línea 1 eof
-    assert!(!app.buffer().line_text(0).contains("😀"), "rango borrado completo");
-    let joined: Vec<String> = (0..app.buffer().len_lines()).map(|l| app.buffer().line_text(l)).collect();
+    assert!(
+        !app.buffer().line_text(0).contains("😀"),
+        "rango borrado completo"
+    );
+    let joined: Vec<String> = (0..app.buffer().len_lines())
+        .map(|l| app.buffer().line_text(l))
+        .collect();
     assert_eq!(joined.join("|"), "|", "todo borrado");
     drop(app);
     let _ = std::fs::remove_file(p);

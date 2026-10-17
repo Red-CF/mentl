@@ -80,8 +80,15 @@ impl Sidebar {
                 return;
             }
             *budget -= 1;
-            rows.push(TreeRow { path: path.clone(), depth, is_dir });
-            if is_dir && expanded.get(&path).copied().unwrap_or(false) && depth < crate::finder::MAX_DEPTH as u8 {
+            rows.push(TreeRow {
+                path: path.clone(),
+                depth,
+                is_dir,
+            });
+            if is_dir
+                && expanded.get(&path).copied().unwrap_or(false)
+                && depth < crate::finder::MAX_DEPTH as u8
+            {
                 Self::walk_dir(&path, depth + 1, expanded, rows, budget);
             }
         }
@@ -89,7 +96,7 @@ impl Sidebar {
 
     /// Enter/l sobre la fila del cursor: expandir/colapsar dir, o abrir file.
     pub fn toggle_row(&mut self) -> Option<&TreeRow> {
-        let Some(row) = self.rows.get(self.cursor) else { return None };
+        let row = self.rows.get(self.cursor)?;
         if row.is_dir {
             let open = self.expanded.get(&row.path).copied().unwrap_or(false);
             self.expanded.insert(row.path.clone(), !open);
@@ -101,20 +108,20 @@ impl Sidebar {
 
     /// h sobre dir colapsado = sube al padre.
     pub fn collapse_or_parent(&mut self) {
-        if let Some(row) = self.rows.get(self.cursor) {
-            if row.is_dir && self.expanded.get(&row.path).copied().unwrap_or(false) {
-                self.expanded.insert(row.path.clone(), false);
-                self.rebuild();
-                return;
-            }
+        if let Some(row) = self.rows.get(self.cursor)
+            && row.is_dir
+            && self.expanded.get(&row.path).copied().unwrap_or(false)
+        {
+            self.expanded.insert(row.path.clone(), false);
+            self.rebuild();
+            return;
         }
-        if let Some(row) = self.rows.get(self.cursor) {
-            if let Some(parent) = row.path.parent() {
-                if let Some(i) = self.rows.iter().position(|r| r.path == parent) {
-                    self.cursor = i;
-                    self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
-                }
-            }
+        if let Some(row) = self.rows.get(self.cursor)
+            && let Some(parent) = row.path.parent()
+            && let Some(i) = self.rows.iter().position(|r| r.path == parent)
+        {
+            self.cursor = i;
+            self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
         }
     }
 
@@ -123,7 +130,6 @@ impl Sidebar {
         self.cursor = c.clamp(0, self.rows.len().saturating_sub(1) as isize) as usize;
         self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
     }
-
 }
 
 /// Sincroniza scroll con cursor para un viewport de `h` filas.
@@ -164,7 +170,11 @@ mod tests {
             .drain(..)
             .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, vec!["pkg", "Cargo.toml"], "target filtrado, dirs primero");
+        assert_eq!(
+            names,
+            vec!["pkg", "Cargo.toml"],
+            "target filtrado, dirs primero"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -192,7 +202,11 @@ mod tests {
         sb.move_cursor(1);
         sb.collapse_or_parent();
         assert_eq!(
-            sb.rows[sb.cursor].path.file_name().unwrap().to_string_lossy(),
+            sb.rows[sb.cursor]
+                .path
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
             "pkg"
         );
         let _ = fs::remove_dir_all(&root);

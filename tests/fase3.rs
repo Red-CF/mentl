@@ -1,9 +1,9 @@
 //! Fase 3: tabs lifecycle, popup Esc ≠ Esc-keymap, guard de Quit con AI.
 
-use std::path::PathBuf;
 use crossterm::event::KeyCode;
 use mentl::app::{App, CompletionPopup};
 use mentl::input::InputKey;
+use std::path::PathBuf;
 
 fn key(s: &str) -> InputKey {
     InputKey::parse(s).expect("token válido en test")
@@ -64,8 +64,16 @@ fn esc_popup_solo_cierra_popup_no_insert() {
     // y Up/Down navegan sin escribir texto
     app.completion = Some(mentl::app::CompletionPopup {
         items: vec![
-            mentl::lsp::types::CompletionItem { label: "a".into(), kind: 3, insert: "a".into() },
-            mentl::lsp::types::CompletionItem { label: "b".into(), kind: 3, insert: "b".into() },
+            mentl::lsp::types::CompletionItem {
+                label: "a".into(),
+                kind: 3,
+                insert: "a".into(),
+            },
+            mentl::lsp::types::CompletionItem {
+                label: "b".into(),
+                kind: 3,
+                insert: "b".into(),
+            },
         ],
         filtered: vec![0, 1],
         cursor: 0,
@@ -73,7 +81,11 @@ fn esc_popup_solo_cierra_popup_no_insert() {
     app.on_key(k(KeyCode::Down));
     assert_eq!(app.completion.as_ref().map(|p| p.cursor), Some(1));
     app.on_key(k(KeyCode::Enter));
-    assert_eq!(app.buffer().line_text(0), "buno", "acepta el item con cursor");
+    assert_eq!(
+        app.buffer().line_text(0),
+        "buno",
+        "acepta el item con cursor"
+    );
     drop(app);
 }
 
@@ -119,7 +131,13 @@ fn explorer_abre_en_tab() {
     assert!(app.sidebar.is_some(), "la sidebar se queda abierta");
     assert_eq!(app.open_count(), 2);
     assert_eq!(
-        app.buffer().path.clone().unwrap().file_name().unwrap().to_string_lossy(),
+        app.buffer()
+            .path
+            .clone()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy(),
         "util.rs"
     );
     let _ = std::fs::remove_dir_all(dir);

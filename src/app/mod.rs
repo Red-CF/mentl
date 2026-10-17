@@ -9,7 +9,7 @@ use std::time::Instant;
 use crate::buffer::Buffer;
 use crate::finder::Finder;
 use crate::input::InputKey;
-use crate::keymap::{Mode, KeyMap};
+use crate::keymap::{KeyMap, Mode};
 use crate::lsp::{self, Diag};
 use crate::panes::Panes;
 use crate::theme::{CursorStyle, Theme};
@@ -243,12 +243,12 @@ impl App {
         // arranca client si el buffer inicial es de un lenguaje LSP
         if app.screen == Screen::Editor {
             let p = app.buffer().path.clone();
-            if let Some(p) = p {
-                if let Some(lang) = app.lsp.language_of(&p) {
-                    app.lsp
-                        .ensure_client(lang, &app.config.lsp, app.config.lsp_server(lang));
-                    app.lsp_did_open(&p);
-                }
+            if let Some(p) = p
+                && let Some(lang) = app.lsp.language_of(&p)
+            {
+                app.lsp
+                    .ensure_client(lang, &app.config.lsp, app.config.lsp_server(lang));
+                app.lsp_did_open(&p);
             }
         }
         app
@@ -266,7 +266,9 @@ impl App {
 
     pub fn buffer(&mut self) -> &mut Buffer {
         let idx = self.active_buffer();
-        self.buffers[idx].as_mut().expect("pane apunta a buffer vivo")
+        self.buffers[idx]
+            .as_mut()
+            .expect("pane apunta a buffer vivo")
     }
 
     /// Vecino vivo del buffer idx (prev, si no next) — para cerrar tabs.
@@ -296,9 +298,7 @@ impl App {
             .iter()
             .enumerate()
             .filter_map(|(i, bb)| bb.as_ref().map(|b| (i, b)))
-            .find(|(i, b)| {
-                *i != active && same_path(b.path.as_ref(), Some(&path.to_path_buf()))
-            })
+            .find(|(i, b)| *i != active && same_path(b.path.as_ref(), Some(&path.to_path_buf())))
             .map(|(i, _)| i)
         {
             self.panes.panes[self.panes.active].buffer = existing;
@@ -308,12 +308,12 @@ impl App {
         let idx = self.buffers.len();
         self.buffers.push(Some(b));
         self.panes.panes[self.panes.active].buffer = idx;
-        if let Some(p) = new_path {
-            if let Some(lang) = self.lsp.language_of(&p) {
-                self.lsp
-                    .ensure_client(lang, &self.config.lsp, self.config.lsp_server(lang));
-                self.lsp_did_open(&p);
-            }
+        if let Some(p) = new_path
+            && let Some(lang) = self.lsp.language_of(&p)
+        {
+            self.lsp
+                .ensure_client(lang, &self.config.lsp, self.config.lsp_server(lang));
+            self.lsp_did_open(&p);
         }
         Ok(())
     }
@@ -340,15 +340,17 @@ impl App {
                 .iter()
                 .flatten()
                 .any(|bb| same_path(bb.path.as_ref(), Some(&p)));
-            if !still_open {
-                if let Some(lang) = self.lsp.language_of(&p) {
-                    let uri = lsp::types::path_to_uri(&p);
-                    self.lsp.notify(lang, "textDocument/didClose", serde_json::json!({
+            if !still_open && let Some(lang) = self.lsp.language_of(&p) {
+                let uri = lsp::types::path_to_uri(&p);
+                self.lsp.notify(
+                    lang,
+                    "textDocument/didClose",
+                    serde_json::json!({
                         "textDocument": {"uri": uri}
-                    }));
-                    self.diagnostics.remove(&p);
-                    self.sync_state.remove(&p);
-                }
+                    }),
+                );
+                self.diagnostics.remove(&p);
+                self.sync_state.remove(&p);
             }
         }
         self.follow_cursor();
@@ -387,11 +389,11 @@ impl App {
                 changed = true;
             }
         }
-        if let Some((_, t)) = &self.msg {
-            if t.elapsed() >= std::time::Duration::from_secs(5) {
-                self.msg = None;
-                changed = true;
-            }
+        if let Some((_, t)) = &self.msg
+            && t.elapsed() >= std::time::Duration::from_secs(5)
+        {
+            self.msg = None;
+            changed = true;
         }
         self.lsp_sync_tick();
         self.completion_tick();
@@ -448,14 +450,17 @@ impl App {
     pub fn follow_cursor(&mut self) {
         let (l, _) = self.buffer().cursor;
         let geo = self.geo();
-        self.panes.panes[self.panes.active].view.ensure_visible(l, &geo);
+        self.panes.panes[self.panes.active]
+            .view
+            .ensure_visible(l, &geo);
     }
 
     /// Rects por pane (área de editor: sidebar/tabs/panel fuera).
     pub fn pane_rects(&self) -> Vec<(usize, Rect)> {
         let mut out = Vec::new();
         let mut seps = Vec::new();
-        self.panes.layout(self.last_editor_rect, &mut out, &mut seps);
+        self.panes
+            .layout(self.last_editor_rect, &mut out, &mut seps);
         out
     }
 
@@ -517,4 +522,5 @@ pub fn find_all(text: &str, pat: &str, smart: bool) -> Vec<(usize, usize)> {
         }
     }
     out
-}mod edit;
+}
+mod edit;

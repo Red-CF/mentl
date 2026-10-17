@@ -1,11 +1,11 @@
 //! Smoke: flujo completo de eventos sobre TestBackend — sin pty.
 
-use std::path::PathBuf;
 use crossterm::event::KeyCode;
-use ratatui::{Terminal, backend::TestBackend};
 use mentl::app::App;
-use mentl::input::InputKey;
 use mentl::draw::draw;
+use mentl::input::InputKey;
+use ratatui::{Terminal, backend::TestBackend};
+use std::path::PathBuf;
 
 fn key(s: &str) -> InputKey {
     InputKey::parse(s).expect("token de tecla válido en test")
@@ -18,11 +18,6 @@ fn k(code: KeyCode) -> InputKey {
 fn sample() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.txt")
 }
-
-fn screen_str(t: &Terminal<TestBackend>) -> String {
-    t.backend().buffer().content.iter().map(|c| c.symbol()).collect()
-}
-
 #[test]
 fn abre_edita_deshace_guarda_sale() {
     // copia del fixture a tmp para no mutar el repo
@@ -42,7 +37,11 @@ fn abre_edita_deshace_guarda_sale() {
     app.on_key(k(KeyCode::Char('m')));
     app.on_key(k(KeyCode::Enter));
     app.on_key(k(KeyCode::Esc));
-    assert_eq!(app.buffer().line_text(0), "m", "char + enter: línea nueva arriba");
+    assert_eq!(
+        app.buffer().line_text(0),
+        "m",
+        "char + enter: línea nueva arriba"
+    );
 
     // undo: desaparece
     app.on_key(key("u"));
@@ -57,7 +56,10 @@ fn abre_edita_deshace_guarda_sale() {
     app.on_key(key("C-s"));
     assert!(!app.buffer().modified, "guardado = sin cambios pendientes");
     let on_disk = std::fs::read_to_string(&tmp_path).unwrap();
-    assert_eq!(on_disk, "hola mentl mundo\nesto es un archivo de prueba\ncon tres líneas\n");
+    assert_eq!(
+        on_disk,
+        "hola mentl mundo\nesto es un archivo de prueba\ncon tres líneas\n"
+    );
 
     // quit con leader q (leader = espacio)
     app.on_key(key("space"));

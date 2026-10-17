@@ -1,11 +1,10 @@
 //! fase 4: auto-close, autoindent, indent-detection.
 
-use std::path::PathBuf;
 use crossterm::event::KeyCode;
 use mentl::app::App;
 use mentl::buffer::IndentKind;
 use mentl::input::InputKey;
-use mentl::keymap::Mode;
+use std::path::PathBuf;
 
 fn key(s: &str) -> InputKey {
     InputKey::parse(s).unwrap()
@@ -86,6 +85,10 @@ fn tab_inserta_unidad_detectada() {
     let mut app = App::new(Some(p));
     app.on_key(key("i"));
     app.on_key(k(KeyCode::Tab));
-    assert_eq!(app.buffer().line_text(0), "\t\tx", "inserta \t, no 4 espacios");
+    assert_eq!(
+        app.buffer().line_text(0),
+        "\t\tx",
+        "inserta \t, no 4 espacios"
+    );
     drop(app);
 }

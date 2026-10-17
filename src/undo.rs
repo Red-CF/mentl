@@ -2,8 +2,8 @@
 //! Stroke con agrupación: misma marca en <1s = un solo undo (la ventana se
 //! refresca con cada edición de la misma marca, agrupa sesiones de tecleo).
 
-use std::time::{Duration, Instant};
 use ropey::Rope;
+use std::time::{Duration, Instant};
 
 pub type Snap = (Rope, (usize, usize));
 

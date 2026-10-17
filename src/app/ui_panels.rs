@@ -1,21 +1,22 @@
 //! Paneles de UI: completion popup, explorer sidebar, problems panel.
 
-
 use std::time::Instant;
 
-use crate::app::{App, ProblemRow};
 use super::same_path;
-use crate::lsp;
+use crate::app::{App, ProblemRow};
 use crate::buffer::Buffer;
 use crate::input::InputKey;
 use crate::keymap::Mode;
+use crate::lsp;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crossterm::event::KeyCode as K;
 
 impl App {
-pub(super) fn completion_move(&mut self, d: isize) {
-        let Some(p) = self.completion.as_mut() else { return };
+    pub(super) fn completion_move(&mut self, d: isize) {
+        let Some(p) = self.completion.as_mut() else {
+            return;
+        };
         let n = p.filtered.len();
         if n == 0 {
             return;
@@ -24,13 +25,16 @@ pub(super) fn completion_move(&mut self, d: isize) {
         p.cursor = c.clamp(0, n as isize - 1) as usize;
     }
 
-
-pub(super) fn completion_accept(&mut self, which: Option<usize>) {
-        let Some(p) = self.completion.as_ref() else { return };
+    pub(super) fn completion_accept(&mut self, which: Option<usize>) {
+        let Some(p) = self.completion.as_ref() else {
+            return;
+        };
         let idx = which
             .unwrap_or(p.cursor)
             .min(p.filtered.len().saturating_sub(1));
-        let Some(&item_idx) = p.filtered.get(idx) else { return };
+        let Some(&item_idx) = p.filtered.get(idx) else {
+            return;
+        };
         let insert = p.items[item_idx].insert.clone();
         self.completion = None;
         self.buffer().insert_text(&insert, "insert");
@@ -38,14 +42,12 @@ pub(super) fn completion_accept(&mut self, which: Option<usize>) {
         let _ = which;
     }
 
-
-pub(super) fn completion_close(&mut self) {
+    pub(super) fn completion_close(&mut self) {
         self.completion = None;
         self.completion_wait = None;
     }
 
-
-pub(super) fn completion_refilter(&mut self) {
+    pub(super) fn completion_refilter(&mut self) {
         let (prefix, cur_g) = {
             let b = self.buffer();
             let text = b.line_text(b.cursor.0);
@@ -64,7 +66,9 @@ pub(super) fn completion_refilter(&mut self) {
             let cut = Buffer::grapheme_byte_of(&text, g);
             (text.get(word_b..cut).unwrap_or("").to_string(), g)
         };
-        let Some(p) = self.completion.as_mut() else { return };
+        let Some(p) = self.completion.as_mut() else {
+            return;
+        };
         let _ = cur_g;
         p.filtered = p
             .items
@@ -79,14 +83,17 @@ pub(super) fn completion_refilter(&mut self) {
         }
     }
 
-
-pub(super) fn trigger_completion(&mut self) {
+    pub(super) fn trigger_completion(&mut self) {
         self.ldbg("trigger");
         if self.completion_wait.is_some() {
             return;
         }
-        let Some(path) = self.buffer().path.clone() else { return };
-        let Some(lang) = self.lsp.language_of(&path) else { return };
+        let Some(path) = self.buffer().path.clone() else {
+            return;
+        };
+        let Some(lang) = self.lsp.language_of(&path) else {
+            return;
+        };
         if !self.lsp.is_ready(lang) {
             return;
         }
@@ -94,10 +101,13 @@ pub(super) fn trigger_completion(&mut self) {
         self.completion_wait = Some((0, path, rev, Instant::now())); // 0 = sin mandar
     }
 
-
-pub(super) fn completion_tick(&mut self) {
-        if std::env::var("MENTL_LSP_DEBUG").is_ok() && self.completion_wait.is_some() { eprintln!("[app] comp tick"); }
-        let Some((req, path, rev, since)) = self.completion_wait.clone() else { return };
+    pub(super) fn completion_tick(&mut self) {
+        if std::env::var("MENTL_LSP_DEBUG").is_ok() && self.completion_wait.is_some() {
+            eprintln!("[app] comp tick");
+        }
+        let Some((req, path, rev, since)) = self.completion_wait.clone() else {
+            return;
+        };
         if self.mode != Mode::Insert {
             self.completion_close();
             return;
@@ -129,9 +139,10 @@ pub(super) fn completion_tick(&mut self) {
         }
     }
 
-
-pub(super) fn sidebar_key(&mut self, k: InputKey) {
-                let Some(sb) = &mut self.sidebar else { return self.close_sidebar() };
+    pub(super) fn sidebar_key(&mut self, k: InputKey) {
+        let Some(sb) = &mut self.sidebar else {
+            return self.close_sidebar();
+        };
         match k.code {
             K::Char('j') | K::Down => sb.move_cursor(1),
             K::Char('k') | K::Up => sb.move_cursor(-1),
@@ -140,7 +151,6 @@ pub(super) fn sidebar_key(&mut self, k: InputKey) {
                     sb.toggle_row();
                 } else {
                     self.sidebar_open_file();
-                    return;
                 }
             }
             K::Char('h') | K::Left => sb.collapse_or_parent(),
@@ -149,37 +159,33 @@ pub(super) fn sidebar_key(&mut self, k: InputKey) {
                     sb.toggle_row();
                 } else {
                     self.sidebar_open_file();
-                    return;
                 }
             }
             _ => {}
         }
     }
 
-
-pub(super) fn sidebar_open_file(&mut self) {
+    pub(super) fn sidebar_open_file(&mut self) {
         let path = self
             .sidebar
             .as_ref()
             .and_then(|s| s.rows.get(s.cursor))
             .filter(|r| !r.is_dir)
             .map(|r| r.path.clone());
-        if let Some(p) = path {
-            if let Err(e) = self.open_in_pane(&p) {
-                self.status_msg(e);
-            }
+        if let Some(p) = path
+            && let Err(e) = self.open_in_pane(&p)
+        {
+            self.status_msg(e);
         }
         self.close_sidebar();
     }
 
-
-pub(super) fn close_sidebar(&mut self) {
+    pub(super) fn close_sidebar(&mut self) {
         self.sidebar_focus = false;
     }
 
-
-pub(super) fn problems_key(&mut self, k: InputKey) {
-                let count = self.problem_rows().len();
+    pub(super) fn problems_key(&mut self, k: InputKey) {
+        let count = self.problem_rows().len();
         if count == 0 {
             return;
         }
@@ -207,8 +213,7 @@ pub(super) fn problems_key(&mut self, k: InputKey) {
         self.problems_cursor = self.problems_cursor.min(count.saturating_sub(1));
     }
 
-
-pub fn problem_rows(&self) -> Vec<ProblemRow> {
+    pub fn problem_rows(&self) -> Vec<ProblemRow> {
         let mut out: Vec<ProblemRow> = Vec::new();
         for (path, diags) in &self.diagnostics {
             let path = path.clone();
@@ -224,11 +229,11 @@ pub fn problem_rows(&self) -> Vec<ProblemRow> {
             }
         }
         out.sort_by(|a, b| {
-            a.path.cmp(&b.path)
+            a.path
+                .cmp(&b.path)
                 .then(a.line_display.cmp(&b.line_display))
                 .then(a.col_u16.cmp(&b.col_u16))
         });
         out
     }
-
 }
