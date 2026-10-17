@@ -117,6 +117,7 @@ impl Default for DiagSev {
 pub struct Diag {
     pub line: u32,
     pub character: u32,
+    pub character_end: u32,
     pub severity: u32, // 1 error 2 warn 3 info 4 hint
     pub msg: String,
 }
@@ -153,6 +154,7 @@ pub fn parse_diagnostics(params: &Value) -> Option<(String, Vec<Diag>)> {
             Some(Diag {
                 line: range.as_ref().map(|r| r.start.line).unwrap_or(0),
                 character: range.as_ref().map(|r| r.start.character).unwrap_or(0),
+                character_end: range.as_ref().map(|r| r.end.character).unwrap_or(0),
                 severity: rd.severity.unwrap_or(1),
                 msg: rd.message.unwrap_or_default(),
             })
@@ -216,6 +218,33 @@ pub fn strip_markdown(s: &str) -> String {
         res.push('\n');
     }
     res.trim().to_string()
+}
+
+/// textDocument/formatting: [TextEdit] tolerante -> TextLspEdit (UTF-16).
+pub fn parse_text_edits(result: &Value) -> Vec<crate::buffer::TextLspEdit> {
+    result
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| {
+                    let start = e.pointer("/range/start")?;
+                    let end = e.pointer("/range/end")?;
+                    Some(crate::buffer::TextLspEdit {
+                        start_line: start.get("line").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
+                        start_u16: start.get("character").and_then(|c| c.as_u64()).unwrap_or(0)
+                            as u32,
+                        end_line: end.get("line").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
+                        end_u16: end.get("character").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
+                        new_text: e
+                            .get("newText")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// definition result tolerante: null | Location | [Location] | [LocationLink].

@@ -262,12 +262,19 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
                 *e = (*e).min(d.severity);
             }
         }
+        let path = app.buffers[buffer_idx]
+            .as_ref()
+            .and_then(|b| b.path.clone());
         let ctx = PaneCtx {
             tab_w: app.config.editor.tab_width,
             mode: app.mode,
             pat: app.search.clone(),
             theme: app.theme,
             diag_by_line: &diag_by_line,
+            diags: path
+                .as_ref()
+                .and_then(|p| app.diagnostics.get(p))
+                .map(|v| v.as_slice()),
             sel: sel_norm.filter(|_| buffer_idx == app.active_buffer()),
         };
         draw_pane(
@@ -598,6 +605,8 @@ struct PaneCtx<'a> {
     pat: Option<String>,
     theme: crate::theme::Theme,
     diag_by_line: &'a std::collections::HashMap<usize, u32>,
+    /// diagnósticos (por línea) → (start_u16, end_u16, severity)
+    diags: Option<&'a [crate::lsp::Diag]>,
     sel: Option<SelRange>,
 }
 
@@ -673,7 +682,27 @@ fn draw_pane(
         let sel_mark = sel.and_then(|(min, max, line_kind)| {
             sel_bytes_for_line(&text, i, min, max, line_kind, cursor.0)
         });
-        rows.push(render_line(&text, cursor_byte, &matches, sel_mark, &t));
+        let squigs: Vec<(usize, usize, u32)> = ctx
+            .diags
+            .unwrap_or(&[])
+            .iter()
+            .filter(|d| d.line == i)
+            .map(|d| {
+                (
+                    squiggle_bytes(text.as_str(), d.col_u16),
+                    squiggle_bytes(text.as_str(), d.col_end_u16),
+                    d.severity,
+                )
+            })
+            .collect();
+        rows.push(render_line(
+            &text,
+            cursor_byte,
+            &matches,
+            sel_mark,
+            &squigs,
+            &t,
+        ));
     }
     let text_rect = Rect {
         x: rect.x + gutter_w as u16,
@@ -706,6 +735,34 @@ fn display_width(seg: &str, tab_w: usize) -> usize {
             }
         })
         .sum()
+}
+
+/// UTF-16 col -> byte offset dentro de un &str de render.
+fn squiggle_bytes(text: &str, col_u16: u32) -> usize {
+    let mut acc = 0usize;
+    for g in text.graphemes(true) {
+        let w: usize = g.chars().map(|c| c.len_utf16()).sum();
+        if acc >= col_u16 as usize {
+            break;
+        }
+        acc += w;
+    }
+    // offset: camina de nuevo contando BYTES de los graphemes consumidos
+    let mut consumed = 0u32;
+    let mut bytes = 0usize;
+    for g in text.graphemes(true) {
+        if consumed as usize >= col_u16 as usize {
+            break;
+        }
+        consumed += g.chars().map(|c| c.len_utf16()).sum::<usize>() as u32;
+        bytes += g.len();
+    }
+    if consumed as usize >= col_u16 as usize {
+        bytes
+    } else {
+        let _ = acc;
+        bytes
+    }
 }
 
 /// Byte range de la selección en esta línea (con límites correctos por línea).
@@ -746,6 +803,7 @@ fn render_line(
     cursor_byte: Option<(usize, Mode)>,
     matches: &[(usize, usize)],
     sel: Option<(usize, usize)>,
+    squigs: &[(usize, usize, u32)],
     t: &crate::theme::Theme,
 ) -> Line<'static> {
     if text.is_empty() {
@@ -777,6 +835,9 @@ fn render_line(
     if let Some((s, e)) = sel {
         marks.push((s, e, 0)); // mismo peso que match — el estilo difiere
     }
+    for (s, e, _sev) in squigs {
+        marks.push((*s, *e, 0)); // subrayado con color por segmento (abajo)
+    }
     let mut pts: Vec<usize> = marks.iter().flat_map(|m| [m.0, m.1]).collect();
     pts.push(0);
     pts.push(text.len());
@@ -793,12 +854,23 @@ fn render_line(
             .map(|(_, _, m)| m);
         let is_match = matches.iter().any(|(s, e)| a >= *s && a < *e);
         let is_sel = sel.is_some_and(|(s, e)| a >= s && a < e);
+        let sev = squigs
+            .iter()
+            .find(|(s, e, _)| a >= *s && a < *e)
+            .map(|(_, _, sev)| *sev);
         let piece = text.get(a..b).unwrap_or("").to_string();
         let style = match cursor_mode {
             Some(Mode::Normal) => Style::new().bg(t.accent).fg(t.cursor_fg),
             Some(Mode::Insert) => Style::new().underlined().fg(t.fg).underline_color(t.accent),
             _ if is_sel => Style::new().bg(t.visual_bg).fg(t.fg),
             _ if is_match => Style::new().bg(t.match_bg).fg(t.cursor_fg),
+            _ if sev.is_some() => Style::new()
+                .underlined()
+                .fg(t.fg)
+                .underline_color(match sev {
+                    Some(1) => t.diag_error,
+                    _ => t.diag_warn,
+                }),
             _ => Style::new().fg(t.fg),
         };
         spans.push(Span::styled(piece, style));

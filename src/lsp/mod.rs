@@ -12,10 +12,10 @@ use crate::config::{LspCfg, ServerCfg};
 
 #[derive(Debug, Clone)]
 pub struct Diag {
-    pub line: usize,  // 0-based
-    pub col_u16: u32, // crudo UTF-16 (para saltar aun sin buffer abierto);
-    // pos_of_lsp volverá aquí cuando lleguen las squiggles
-    pub severity: u32, // 1 error 2 warn 3 info 4 hint
+    pub line: usize,      // 0-based
+    pub col_u16: u32,     // crudo UTF-16 (para saltar aun sin buffer abierto)
+    pub col_end_u16: u32, // fin del rango (para las squiggles)
+    pub severity: u32,    // 1 error 2 warn 3 info 4 hint
     pub msg: String,
 }
 

@@ -74,6 +74,8 @@ impl App {
                 Ok(()) => {
                     self.status_msg("guardado ✓");
                     self.lsp_did_save();
+                    self.format_round_done = false;
+                    self.request_format();
                 }
                 Err(e) => self.status_msg(e),
             },
@@ -114,6 +116,25 @@ impl App {
             CursorStyleNext => {
                 self.cursor_style = self.cursor_style.next();
                 self.cursor_style_dirty = true;
+            }
+            CommentLine => {
+                let l = self.buffer().cursor.0;
+                self.buffer().comment_toggle_lines(l, l);
+                self.follow_cursor();
+            }
+            MoveLinesDown => {
+                let (l, _) = self.buffer().cursor;
+                if self.buffer().move_lines(l, l, true) {
+                    self.buffer().to(l + 1, 0);
+                }
+                self.follow_cursor();
+            }
+            MoveLinesUp => {
+                let (l, _) = self.buffer().cursor;
+                if self.buffer().move_lines(l, l, false) {
+                    self.buffer().to(l - 1, 0);
+                }
+                self.follow_cursor();
             }
             BracketMatch => {
                 self.buffer().bracket_match();
@@ -425,9 +446,23 @@ impl App {
     }
 
     pub fn on_key(&mut self, k: InputKey) {
-        // hover se cierra con cualquier tecla (y esa tecla sigue su curso)
+        // hover: j/k (flechas) ENROLAN; cualquier otra tecla lo cierra y sigue
         if self.hover.is_some() {
-            self.hover = None;
+            use crossterm::event::KeyCode as K;
+            match k.code {
+                K::Char('j') | K::Down => {
+                    self.hover_scroll += 1;
+                    return;
+                }
+                K::Char('k') | K::Up => {
+                    self.hover_scroll = self.hover_scroll.saturating_sub(1);
+                    return;
+                }
+                _ => {
+                    self.hover = None;
+                    self.hover_scroll = 0;
+                }
+            }
         }
         // hover/def timeouts (stale)
         for slot in [&mut self.hover_wait, &mut self.def_wait] {

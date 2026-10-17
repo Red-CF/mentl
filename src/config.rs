@@ -139,6 +139,9 @@ impl Default for Keys {
         normal.insert("leader %".into(), "bracket_match".into());
         normal.insert("leader r".into(), "replace_prompt".into());
         normal.insert("leader G".into(), "goto_line_prompt".into());
+        normal.insert("g c c".into(), "comment_line".into());
+        normal.insert("A-Down".into(), "move_lines_down".into());
+        normal.insert("A-Up".into(), "move_lines_up".into());
         Self {
             leader: " ".into(),
             normal,
@@ -179,6 +182,7 @@ pub struct ServerCfg {
 pub struct LspCfg {
     pub enabled: bool,
     pub debounce_ms: u64,
+    pub format_on_save: bool,
     pub rust: Option<ServerCfg>,
     pub java: Option<ServerCfg>,
 }
@@ -187,6 +191,7 @@ impl Default for LspCfg {
         Self {
             enabled: true,
             debounce_ms: 300,
+            format_on_save: false,
             rust: None,
             java: None,
         }
