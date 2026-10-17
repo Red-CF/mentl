@@ -122,6 +122,11 @@ impl Buffer {
         !self.ai
     }
 
+    /// ¿indent por espacios? (para las opciones del LSP)
+    pub fn is_spaces(&self) -> bool {
+        !matches!(self.indent, IndentKind::Tabs)
+    }
+
     /// Unidad de indentación de este buffer.
     pub fn indent_unit(&self) -> String {
         match self.indent {
@@ -769,8 +774,68 @@ impl Buffer {
             (c0.min(c1), c0.max(c1))
         }
     }
+
+    // ------------------------------------------------------- mover líneas ---
+
+    /// Mueve el bloque [first, last] una posición abajo (o arriba). 1 undo.
+    pub fn move_lines(&mut self, first: usize, last: usize, down: bool) -> bool {
+        if down {
+            if last + 1 >= self.len_lines() {
+                return false;
+            }
+            let (c0, c1) = self.sel_chars((first, 0), (last, 0), true);
+            let (c2, c3) = self.sel_chars((last + 1, 0), (last + 1, 0), true);
+            let block_first: String = self.rope.slice(c0..c1).chunks().collect();
+            let next_line: String = self.rope.slice(c2..c3).chunks().collect();
+            self.replace_range(c0, c3, &format!("{next_line}{block_first}"), "move");
+            true
+        } else {
+            if first == 0 {
+                return false;
+            }
+            let (c0, c1) = self.sel_chars((first - 1, 0), (first - 1, 0), true);
+            let (c2, c3) = self.sel_chars((first, 0), (last, 0), true);
+            let prev_line: String = self.rope.slice(c0..c1).chunks().collect();
+            let block: String = self.rope.slice(c2..c3).chunks().collect();
+            self.replace_range(c0, c3, &format!("{block}{prev_line}"), "move");
+            true
+        }
+    }
+
+    /// Ordena alfabéticamente el rango [first, last] — 1 undo.
+    pub fn sort_lines(&mut self, first: usize, last: usize) {
+        let last = last.min(self.len_lines().saturating_sub(1));
+        let mut texts: Vec<String> = (first..=last).map(|l| self.line_text(l)).collect();
+        texts.sort();
+        let joined = texts.join("\n");
+        let (c0, c1) = self.sel_chars((first, 0), (last, 0), true);
+        self.replace_range(c0, c1, &joined, "sort");
+    }
+
+    /// Aplica TextEdits LSP: UTF-16 -> char offsets, del ÚLTIMO al primero.
+    pub fn apply_text_edits(&mut self, edits: &[TextLspEdit], stroke: &'static str) -> usize {
+        let mut applied = 0;
+        for e in edits.iter().rev() {
+            let (la, ga) = self.pos_of_lsp(e.start_line, e.start_u16);
+            let (lb, gb) = self.pos_of_lsp(e.end_line, e.end_u16);
+            let c0 = self.grapheme_char(la, ga);
+            let c1 = self.grapheme_char(lb, gb);
+            self.replace_range(c0.min(c1), c0.max(c1), &e.new_text, stroke);
+            applied += 1;
+        }
+        applied
+    }
 }
 
+/// TextEdit LSP con posiciones crudas (UTF-16).
+#[derive(Debug, Clone)]
+pub struct TextLspEdit {
+    pub start_line: u32,
+    pub start_u16: u32,
+    pub end_line: u32,
+    pub end_u16: u32,
+    pub new_text: String,
+}
 /// Indent detection: mayoría entre tabs y patrones de espacios (≤200 líneas).
 fn detect_indent(rope: &Rope, fallback: usize) -> IndentKind {
     let mut tabs = 0usize;

@@ -153,6 +153,44 @@ fn framing_content_length() {
     assert_eq!(v["params"]["x"], "héllo 😀");
 }
 #[test]
+fn formatting_edits_parse() {
+    // el mock responde formatting con 1 TextEdit: parseo y aplicación
+    let mut h = hub();
+    let (cfg, server) = mock_cfg();
+    h.ensure_client("rust", &cfg, Some(&server));
+    wait_event(&h, 3000, |e| {
+        matches!(e, LspEvent::Started { lang: "rust" })
+    })
+    .expect("arranca");
+    h.mark_ready("rust");
+    let req = h
+        .request(
+            "rust",
+            "textDocument/formatting",
+            serde_json::json!({
+                "textDocument": {"uri": "file:///mock.rs"},
+                "options": {"tabSize": 4},
+            }),
+        )
+        .unwrap();
+    let resp = wait_event(
+        &h,
+        3000,
+        |e| matches!(e, LspEvent::Response { req_id, .. } if *req_id == req),
+    )
+    .expect("fmt response");
+    let LspEvent::Response { body, .. } = resp else {
+        unreachable!()
+    };
+    let edits = lsp::types::parse_text_edits(&body);
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0].new_text, "XXX");
+    assert_eq!((edits[0].start_line, edits[0].start_u16), (0, 0));
+    assert_eq!((edits[0].end_line, edits[0].end_u16), (0, 3));
+    drop(h);
+}
+
+#[test]
 fn completion_roundtrip() {
     let mut h = hub();
     let (cfg, server) = mock_cfg();

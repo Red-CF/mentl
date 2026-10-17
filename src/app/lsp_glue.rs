@@ -13,6 +13,32 @@ impl App {
         }
     }
 
+    /// didSave -> si format_on_save y server listo, pide formatting para
+    /// reaplicar al archivo. Guard de rev + un solo giro (format_round_done).
+    pub(super) fn request_format(&mut self) {
+        if !self.config.lsp.format_on_save || self.format_round_done {
+            return;
+        }
+        let Some(path) = self.buffer().path.clone() else {
+            return;
+        };
+        let Some(lang) = self.lsp.language_of(&path) else {
+            return;
+        };
+        if !self.lsp.is_ready(lang) {
+            return;
+        }
+        let rev = self.buffer().rev;
+        let params = serde_json::json!({
+            "textDocument": {"uri": lsp::types::path_to_uri(&path)},
+            "options": {"tabSize": 4, "insertSpaces": self.buffer().is_spaces()},
+        });
+        let Some(req_id) = self.lsp.request(lang, "textDocument/formatting", params) else {
+            return;
+        };
+        self.format_wait = Some((req_id, path, rev));
+    }
+
     pub(super) fn lsp_sync_tick(&mut self) {
         if !self.config.lsp.enabled {
             return;
@@ -176,6 +202,7 @@ impl App {
                             .map(|d| Diag {
                                 line: d.line as usize,
                                 col_u16: d.character,
+                                col_end_u16: d.character_end,
                                 severity: d.severity,
                                 msg: d.msg,
                             })
@@ -185,6 +212,28 @@ impl App {
                     }
                 }
                 LspEvent::Response { req_id, body } => {
+                    // formatting en vuelo?
+                    let fmt_hit = self
+                        .format_wait
+                        .as_ref()
+                        .is_some_and(|(r, _, _)| *r == req_id);
+                    if fmt_hit {
+                        let (_, _, rev) = self.format_wait.take().unwrap();
+                        self.format_round_done = true;
+                        if self.buffer().rev == rev {
+                            // aplica los edits (del ÚLTIMO al primero) y reescribe
+                            let edits = lsp::types::parse_text_edits(&body);
+                            if !edits.is_empty() {
+                                let n = self.buffer().apply_text_edits(&edits, "format");
+                                self.buffer().file_end();
+                                match self.buffer().save() {
+                                    Ok(()) => self.lsp_did_save(),
+                                    Err(e) => self.status_msg(format!("post-format: {e}")),
+                                }
+                                self.status_msg(format!("formato aplicado ({n} edits) ✓"));
+                            }
+                        }
+                    }
                     // completion en vuelo?
                     let comp_hit = self
                         .completion_wait

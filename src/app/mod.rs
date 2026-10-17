@@ -60,6 +60,7 @@ pub struct App {
     /// hover en espera: req_id, cursor al pedir, instante
     pub hover_wait: Option<(u64, (usize, usize), Instant)>,
     pub hover: Option<String>,
+    pub hover_scroll: usize,
     /// pending goto-def: req_id, cursor de origen, instante
     pub def_wait: Option<(u64, (usize, usize), Instant)>,
     /// didChange debounce: path -> (último rev mandado, primera ed sin mandar)
@@ -74,6 +75,9 @@ pub struct App {
     pub problems_scroll: usize,
     pub completion: Option<CompletionPopup>,
     pub completion_wait: Option<(u64, PathBuf, u64, Instant)>,
+    pub git_branch: Option<String>,
+    pub format_wait: Option<(u64, PathBuf, u64)>,
+    pub format_round_done: bool,
     pub ai_ctx: Option<String>,
     pub ai_jobs: Vec<AiJob>,
     // ------------------------------------------------------------ welcome --
@@ -210,6 +214,7 @@ impl App {
             diagnostics: HashMap::new(),
             hover_wait: None,
             hover: None,
+            hover_scroll: 0,
             def_wait: None,
             sync_state: HashMap::new(),
             sidebar: None,
@@ -220,6 +225,9 @@ impl App {
             problems_scroll: 0,
             completion: None,
             completion_wait: None,
+            git_branch: None,
+            format_wait: None,
+            format_round_done: false,
             ai_ctx: None,
             ai_jobs: Vec::new(),
             welcome_cursor: 0,
@@ -251,6 +259,7 @@ impl App {
                 app.lsp_did_open(&p);
             }
         }
+        app.git_branch = git_branch_of(&app.project_root);
         app
     }
 
@@ -468,6 +477,27 @@ impl App {
     pub(super) fn pane_zero_empty(&mut self) {
         self.buffers[0] = Some(Buffer::empty(None));
         self.panes.panes[self.panes.active].buffer = 0;
+    }
+}
+
+/// Branch de git caminando .git/HEAD hacia arriba (sin spawn de procesos).
+pub fn git_branch_of(root: &std::path::Path) -> Option<String> {
+    use std::fs;
+    let mut dir: &std::path::Path = root;
+    loop {
+        let head = dir.join(".git").join("HEAD");
+        if head.is_file() {
+            let content = fs::read_to_string(&head).ok()?;
+            return content
+                .trim()
+                .strip_prefix("ref: refs/heads/")
+                .map(String::from)
+                .or_else(|| {
+                    let raw = content.trim();
+                    Some(raw[..12.min(raw.len())].to_string())
+                });
+        }
+        dir = dir.parent()?;
     }
 }
 

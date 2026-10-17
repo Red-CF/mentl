@@ -60,6 +60,9 @@ pub enum Action {
     BracketMatch,
     ReplacePrompt,
     GotoLinePrompt,
+    CommentLine,
+    MoveLinesDown,
+    MoveLinesUp,
 }
 
 pub fn parse(id: &str) -> Option<Action> {
@@ -122,6 +125,9 @@ pub fn parse(id: &str) -> Option<Action> {
         "bracket_match" => Action::BracketMatch,
         "replace_prompt" => Action::ReplacePrompt,
         "goto_line_prompt" => Action::GotoLinePrompt,
+        "comment_line" => Action::CommentLine,
+        "move_lines_down" => Action::MoveLinesDown,
+        "move_lines_up" => Action::MoveLinesUp,
         _ => return None,
     };
     Some(a)

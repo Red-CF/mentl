@@ -38,6 +38,8 @@ pub fn build(app: &mut App, width: usize) -> Line<'static> {
         Style::new().bg(t.status_bg).fg(t.fg),
     ));
 
+    // chip de branch (solo si hay repo)
+    let branch_chip = app.git_branch.clone().unwrap_or_default();
     // chips de diagnósticos + estado lsp (spans coloreados aparte)
     let path = app.buffer().path.clone();
     let (nd_err, nd_warn) = path
@@ -62,6 +64,12 @@ pub fn build(app: &mut App, width: usize) -> Line<'static> {
         Some(l) if app.lsp.ready(l).is_some() => format!("lsp:{l} ⋯"),
         _ => String::new(),
     };
+    if !branch_chip.is_empty() {
+        spans.push(Span::styled(
+            format!(" {branch_chip} "),
+            Style::new().bg(t.status_bg).fg(t.gutter),
+        ));
+    }
     if !diag_chip.is_empty() {
         let style = if nd_err > 0 {
             Style::new().bg(t.status_bg).fg(t.diag_error)
