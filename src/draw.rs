@@ -1,18 +1,22 @@
 //! Render: welcome hub (menú + anim), editor (tabs/sidebar/panes/problems/
 //! popups), statusline y overlays. draw muta &mut App solo para lo visual.
 
-use crate::app::{App, Screen};
 use crate::app::find_all;
+use crate::app::{App, Screen};
 use crate::buffer::Buffer;
 use crate::keymap::Mode;
 use crate::panes::Dir;
 use crate::statusline;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Wrap};
-use ratatui::Frame;
 use unicode_segmentation::UnicodeSegmentation;
+
+type Pos = (usize, usize);
+/// Selección normalizada: (min, max, por línea?).
+type SelRange = (Pos, Pos, bool);
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
@@ -29,8 +33,18 @@ fn draw_welcome(f: &mut Frame, area: Rect, app: &mut App) {
     let t = app.theme;
     let lines_n = 14u16;
     let y0 = area.height.saturating_sub(lines_n) / 2;
-    let top = Rect { x: area.x, y: area.y + y0, width: area.width, height: lines_n };
-    let inner = Rect { x: top.x + 4, y: top.y + 1, width: top.width.saturating_sub(8), height: lines_n - 2 };
+    let top = Rect {
+        x: area.x,
+        y: area.y + y0,
+        width: area.width,
+        height: lines_n,
+    };
+    let inner = Rect {
+        x: top.x + 4,
+        y: top.y + 1,
+        width: top.width.saturating_sub(8),
+        height: lines_n - 2,
+    };
 
     // logo animado: cada letra cicla el color con el frame
     let logo = "◆ MENTL ◆";
@@ -55,7 +69,10 @@ fn draw_welcome(f: &mut Frame, area: Rect, app: &mut App) {
             format!("ruta: {inp}▏"),
             Style::new().fg(t.accent),
         ));
-        rows.push(Line::styled("Enter abre · Esc cancela", Style::new().fg(t.gutter)));
+        rows.push(Line::styled(
+            "Enter abre · Esc cancela",
+            Style::new().fg(t.gutter),
+        ));
     } else if animating {
         for (i, (label, hint)) in App::MENU.iter().enumerate() {
             let sel = i == app.welcome_cursor;
@@ -77,13 +94,19 @@ fn draw_welcome(f: &mut Frame, area: Rect, app: &mut App) {
     }
     rows.push(Line::styled("", Style::new()));
     if let Some(e) = app.live_msg() {
-        rows.push(Line::styled(format!("✖ {e}"), Style::new().fg(t.diag_error)));
+        rows.push(Line::styled(
+            format!("✖ {e}"),
+            Style::new().fg(t.diag_error),
+        ));
     }
     rows.push(Line::styled(
         "j/k mueve · Enter elige · q sale",
         Style::new().fg(t.gutter),
     ));
-    rows.push(Line::styled("config: ~/.config/mentl/config.toml", Style::new().fg(t.gutter)));
+    rows.push(Line::styled(
+        "config: ~/.config/mentl/config.toml",
+        Style::new().fg(t.gutter),
+    ));
 
     f.render_widget(Paragraph::new(rows).centered(), inner);
 }
@@ -103,7 +126,10 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
     };
     let pane_h = editor_h - panel_h;
     let sidebar_w: u16 = if app.sidebar.is_some() {
-        app.config.ui.sidebar_width.min(area.width.saturating_sub(20))
+        app.config
+            .ui
+            .sidebar_width
+            .min(area.width.saturating_sub(20))
     } else {
         0
     };
@@ -121,23 +147,35 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
 
     // fondo de la columna sidebar (tintado, distinto del editor)
     if sidebar_w > 0 {
-        let sb_bg = Rect { x: area.x, y: editor_top, width: sidebar_w, height: pane_h };
+        let sb_bg = Rect {
+            x: area.x,
+            y: editor_top,
+            width: sidebar_w,
+            height: pane_h,
+        };
         let t = app.theme;
-        f.render_widget(
-            Block::default().style(Style::new().bg(t.sidebar_bg)),
-            sb_bg,
-        );
+        f.render_widget(Block::default().style(Style::new().bg(t.sidebar_bg)), sb_bg);
     }
 
     // tabs bar
     if tabs_h == 1 {
-        let tabs_rect = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
+        let tabs_rect = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
         draw_tabs(f, tabs_rect, app);
     }
 
     // sidebar (árbol)
     if sidebar_w > 0 {
-        let sb_rect = Rect { x: area.x, y: editor_top, width: sidebar_w, height: pane_h };
+        let sb_rect = Rect {
+            x: area.x,
+            y: editor_top,
+            width: sidebar_w,
+            height: pane_h,
+        };
         draw_sidebar(f, sb_rect, app);
     }
 
@@ -156,7 +194,12 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
                         .collect();
                     f.render_widget(
                         Paragraph::new(Line::from(v)),
-                        Rect { x: *mid, y: r.y, width: 1, height: r.height },
+                        Rect {
+                            x: *mid,
+                            y: r.y,
+                            width: 1,
+                            height: r.height,
+                        },
                     );
                 }
             }
@@ -165,7 +208,12 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
                     let line: String = "─".repeat(r.width as usize);
                     f.render_widget(
                         Paragraph::new(line).style(style),
-                        Rect { x: r.x, y: *mid, width: r.width, height: 1 },
+                        Rect {
+                            x: r.x,
+                            y: *mid,
+                            width: r.width,
+                            height: 1,
+                        },
                     );
                 }
             }
@@ -173,8 +221,7 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
     }
 
     let mut cursor_pos: Option<(u16, u16)> = None;
-    // selección visual (buffer activo) normalizada
-    let sel_norm: Option<((usize, usize), (usize, usize), bool)> = {
+    let sel_norm: Option<SelRange> = {
         let head = app.buffers[app.active_buffer()].as_ref().map(|b| b.cursor);
         match (app.selection, head) {
             (Some(s), Some(h)) if app.mode == Mode::Visual => {
@@ -197,32 +244,39 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
         .collect();
     for (pane_id, rect, buffer_idx) in pane_specs {
         let active = pane_id == app.panes.active;
-        let Some(pane) = app.panes.panes.get(pane_id) else { continue };
+        let Some(pane) = app.panes.panes.get(pane_id) else {
+            continue;
+        };
         let scroll = pane.view.scroll;
         // severidad por línea (min = más grave): 1 error > 2 warn > resto
-        let path = app.buffers[buffer_idx].as_ref().and_then(|b| b.path.clone());
+        let path = app.buffers[buffer_idx]
+            .as_ref()
+            .and_then(|b| b.path.clone());
         let mut diag_by_line: std::collections::HashMap<usize, u32> =
             std::collections::HashMap::new();
-        if let Some(p) = path.as_ref() {
-            if let Some(ds) = app.diagnostics.get(p) {
-                for d in ds {
-                    let e = diag_by_line.entry(d.line).or_insert(u32::MAX);
-                    *e = (*e).min(d.severity);
-                }
+        if let Some(p) = path.as_ref()
+            && let Some(ds) = app.diagnostics.get(p)
+        {
+            for d in ds {
+                let e = diag_by_line.entry(d.line).or_insert(u32::MAX);
+                *e = (*e).min(d.severity);
             }
         }
+        let ctx = PaneCtx {
+            tab_w: app.config.editor.tab_width,
+            mode: app.mode,
+            pat: app.search.clone(),
+            theme: app.theme,
+            diag_by_line: &diag_by_line,
+            sel: sel_norm.filter(|_| buffer_idx == app.active_buffer()),
+        };
         draw_pane(
             f,
             rect,
             app.buffers[buffer_idx].as_ref().expect("buffer vivo"),
             scroll,
             active,
-            app.config.editor.tab_width,
-            app.mode,
-            app.search.clone(),
-            app.theme,
-            &diag_by_line,
-            sel_norm.filter(|_| buffer_idx == app.active_buffer()),
+            ctx,
             &mut cursor_pos,
         );
     }
@@ -239,13 +293,17 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
     }
 
     // statusline
-    let st_rect = Rect { x: area.x, y: status_y, width: area.width, height: 1 };
+    let st_rect = Rect {
+        x: area.x,
+        y: status_y,
+        width: area.width,
+        height: 1,
+    };
     let line = statusline::build(app, area.width as usize);
     f.render_widget(Paragraph::new(line), st_rect);
 
     // completions popup bajo el cursor del pane activo
-    if app.completion.is_some() && cursor_pos.is_some() {
-        let (cx, cy) = cursor_pos.unwrap();
+    if let (Some(_), Some((cx, cy))) = (app.completion.as_ref(), cursor_pos) {
         let pane_rect = app
             .pane_rects()
             .into_iter()
@@ -280,7 +338,11 @@ fn draw_tabs(f: &mut Frame, rect: Rect, app: &mut App) {
         .flatten()
         .enumerate()
         .map(|(i, b)| {
-            let dot = if b.modified && b.is_persistent() { " •" } else { "" };
+            let dot = if b.modified && b.is_persistent() {
+                " •"
+            } else {
+                ""
+            };
             (format!("[{}]{} ", b.display_name(), dot), i == active)
         })
         .collect();
@@ -302,7 +364,12 @@ fn draw_tabs(f: &mut Frame, rect: Rect, app: &mut App) {
         if *is_active && x + w <= rect.x as usize + rect.width as usize {
             f.render_widget(
                 Paragraph::new(label.clone()).style(Style::new().bg(t.accent).fg(t.cursor_fg)),
-                Rect { x: x as u16, y: rect.y, width: w as u16, height: 1 },
+                Rect {
+                    x: x as u16,
+                    y: rect.y,
+                    width: w as u16,
+                    height: 1,
+                },
             );
         }
         x += w;
@@ -313,14 +380,21 @@ fn draw_tabs(f: &mut Frame, rect: Rect, app: &mut App) {
 
 fn draw_sidebar(f: &mut Frame, rect: Rect, app: &mut App) {
     let t = app.theme;
-    let Some(sb) = app.sidebar.as_mut() else { return };
+    let Some(sb) = app.sidebar.as_mut() else {
+        return;
+    };
     // header: nombre del proyecto
     let proj = sb
         .root
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| sb.root.display().to_string());
-    let header_rect = Rect { x: rect.x + 1, y: rect.y, width: rect.width - 1, height: 1 };
+    let header_rect = Rect {
+        x: rect.x + 1,
+        y: rect.y,
+        width: rect.width - 1,
+        height: 1,
+    };
     f.render_widget(
         Paragraph::new(Line::styled(
             format!("◆ {proj}"),
@@ -343,7 +417,11 @@ fn draw_sidebar(f: &mut Frame, rect: Rect, app: &mut App) {
         let row = &sb.rows[i];
         let indent = "│ ".repeat(row.depth as usize);
         let glyph = if row.is_dir {
-            if sb.expanded.get(&row.path).copied().unwrap_or(false) { "▾ " } else { "▸ " }
+            if sb.expanded.get(&row.path).copied().unwrap_or(false) {
+                "▾ "
+            } else {
+                "▸ "
+            }
         } else {
             "  "
         };
@@ -357,8 +435,7 @@ fn draw_sidebar(f: &mut Frame, rect: Rect, app: &mut App) {
         let sev = app
             .diagnostics
             .get(&row.path)
-            .map(|ds| ds.iter().map(|d| d.severity).min())
-            .flatten();
+            .and_then(|ds| ds.iter().map(|d| d.severity).min());
         let style = if sel {
             Style::new().bg(t.accent).fg(t.cursor_fg)
         } else if !row.is_dir && sev.is_some() {
@@ -396,15 +473,22 @@ fn draw_problems(f: &mut Frame, rect: Rect, app: &mut App) {
         .borders(ratatui::widgets::Borders::TOP)
         .border_style(Style::new().fg(t.gutter))
         .style(Style::new().bg(t.status_bg))
-        .title(Line::styled(format!(" {title} "), Style::new().fg(t.accent)));
+        .title(Line::styled(
+            format!(" {title} "),
+            Style::new().fg(t.accent),
+        ));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
     let rows_h = inner.height as usize;
     crate::explorer::sync_scroll(app.problems_cursor, &mut app.problems_scroll, rows_h);
     let mut lines = Vec::new();
-    let mut count = 0;
-    for (i, p) in rows.iter().enumerate().skip(app.problems_scroll) {
+    for (count, (i, p)) in rows
+        .iter()
+        .enumerate()
+        .skip(app.problems_scroll)
+        .enumerate()
+    {
         if count >= rows_h {
             break;
         }
@@ -418,7 +502,12 @@ fn draw_problems(f: &mut Frame, rect: Rect, app: &mut App) {
             2 => "⚠",
             _ => "•",
         };
-        let label = format!(" {icon} {name}:{}:{} {}", p.line_display + 1, p.col_u16, p.msg);
+        let label = format!(
+            " {icon} {name}:{}:{} {}",
+            p.line_display + 1,
+            p.col_u16,
+            p.msg
+        );
         let style = if app.problems_focus && i == app.problems_cursor {
             Style::new().bg(t.accent).fg(t.cursor_fg)
         } else {
@@ -429,7 +518,6 @@ fn draw_problems(f: &mut Frame, rect: Rect, app: &mut App) {
             }
         };
         lines.push(Line::styled(label, style));
-        count += 1;
     }
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -437,7 +525,9 @@ fn draw_problems(f: &mut Frame, rect: Rect, app: &mut App) {
 // ------------------------------------------------------------- completion ---
 
 fn draw_completion(f: &mut Frame, pane: Rect, cursor_x: u16, cursor_y: u16, app: &mut App) {
-    let Some(p) = app.completion.as_ref() else { return };
+    let Some(p) = app.completion.as_ref() else {
+        return;
+    };
     let t = app.theme;
     let max_w = pane.width.saturating_sub(1);
     let width = p
@@ -448,7 +538,7 @@ fn draw_completion(f: &mut Frame, pane: Rect, cursor_x: u16, cursor_y: u16, app:
         .unwrap_or(1)
         .clamp(8, max_w.max(8));
     // height = items + 2 borders
-    let raw_h = (p.filtered.len() as u16).saturating_add(2).min(10);
+    let raw_h = (p.filtered.len() as u16).saturating_add(2).clamp(3, 10);
     let below = pane.y + pane.height - cursor_y;
     let (y, h) = if below > raw_h {
         (cursor_y + 1, raw_h)
@@ -460,21 +550,33 @@ fn draw_completion(f: &mut Frame, pane: Rect, cursor_x: u16, cursor_y: u16, app:
     let x = cursor_x
         .min(pane.x + pane.width.saturating_sub(width + 1))
         .max(pane.x);
-    let rect = Rect { x, y, width: width.min(max_w), height: h };
+    let rect = Rect {
+        x,
+        y,
+        width: width.min(max_w),
+        height: h,
+    };
     let block = Block::default()
         .borders(ratatui::widgets::Borders::ALL)
         .border_style(Style::new().fg(t.gutter_active))
         .style(Style::new().bg(t.bg));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    let Some(st) = app.completion.as_ref() else { return };
+    let Some(st) = app.completion.as_ref() else {
+        return;
+    };
     let start_row = if st.cursor >= inner.height as usize {
         st.cursor + 1 - inner.height as usize
     } else {
         0
     };
     let mut lines = Vec::new();
-    for &idx in st.filtered.iter().skip(start_row).take(inner.height as usize) {
+    for &idx in st
+        .filtered
+        .iter()
+        .skip(start_row)
+        .take(inner.height as usize)
+    {
         let item = &st.items[idx];
         let pos = st.filtered.iter().position(|&f2| f2 == idx).unwrap_or(0);
         let style = if pos == st.cursor {
@@ -489,21 +591,35 @@ fn draw_completion(f: &mut Frame, pane: Rect, cursor_x: u16, cursor_y: u16, app:
 
 // -------------------------------------------------------------------- pane --
 
+/// Contexto del pane: lo que viaja junto en cada render.
+struct PaneCtx<'a> {
+    tab_w: usize,
+    mode: Mode,
+    pat: Option<String>,
+    theme: crate::theme::Theme,
+    diag_by_line: &'a std::collections::HashMap<usize, u32>,
+    sel: Option<SelRange>,
+}
+
 fn draw_pane(
     f: &mut Frame,
     rect: Rect,
     buf: &Buffer,
     scroll: usize,
     active: bool,
-    tab_w: usize,
-    mode: Mode,
-    pat: Option<String>,
-    theme: crate::theme::Theme,
-    diag_by_line: &std::collections::HashMap<usize, u32>,
-    sel: Option<((usize, usize), (usize, usize), bool)>,
+    ctx: PaneCtx<'_>,
     cursor_pos: &mut Option<(u16, u16)>,
 ) {
-    let t = theme;
+    let t = ctx.theme;
+    let tab_w = ctx.tab_w;
+    let mode = ctx.mode;
+    let smart = ctx
+        .pat
+        .as_ref()
+        .is_some_and(|p| p.chars().any(|c| c.is_uppercase()));
+    let pat = ctx.pat;
+    let diag_by_line = ctx.diag_by_line;
+    let sel = ctx.sel;
     let len = buf.len_lines();
     let gutter_w = (len.to_string().len()).max(2) + 1;
     let cursor = buf.cursor;
@@ -517,7 +633,11 @@ fn draw_pane(
             Some(_) => ("i", Style::new().fg(t.gutter)),
             None => (" ", Style::new()),
         };
-        let base = if i == cursor.0 { t.gutter_active } else { t.gutter };
+        let base = if i == cursor.0 {
+            t.gutter_active
+        } else {
+            t.gutter
+        };
         let style = match diag_by_line.get(&i) {
             Some(1) | Some(2) => sep_style,
             _ => Style::new().fg(base),
@@ -529,11 +649,15 @@ fn draw_pane(
     }
     f.render_widget(
         Paragraph::new(gut),
-        Rect { x: rect.x, y: rect.y, width: gutter_w as u16, height: rect.height },
+        Rect {
+            x: rect.x,
+            y: rect.y,
+            width: gutter_w as u16,
+            height: rect.height,
+        },
     );
 
     // texto
-    let smart = pat.as_ref().is_some_and(|p| p.chars().any(|c| c.is_uppercase()));
     let mut rows: Vec<Line> = Vec::new();
     for i in scroll..(scroll + rect.height as usize).min(len) {
         let text = buf.line_text(i);
@@ -574,10 +698,15 @@ fn draw_pane(
 
 fn display_width(seg: &str, tab_w: usize) -> usize {
     seg.graphemes(true)
-        .map(|g| if g == "\t" { tab_w } else { unicode_width::UnicodeWidthStr::width(g) })
+        .map(|g| {
+            if g == "\t" {
+                tab_w
+            } else {
+                unicode_width::UnicodeWidthStr::width(g)
+            }
+        })
         .sum()
 }
-
 
 /// Byte range de la selección en esta línea (con límites correctos por línea).
 fn sel_bytes_for_line(
@@ -624,13 +753,18 @@ fn render_line(
             Some((0, Mode::Normal)) => {
                 Line::raw(" ").style(Style::new().bg(t.accent).fg(t.cursor_fg))
             }
-            Some((0, Mode::Insert)) => Line::raw(" ")
-                .style(Style::new().underlined().fg(t.fg).underline_color(t.accent)),
+            Some((0, Mode::Insert)) => {
+                Line::raw(" ").style(Style::new().underlined().fg(t.fg).underline_color(t.accent))
+            }
             _ => Line::styled("", Style::new().fg(t.fg)),
         };
     }
     let cursor_range = cursor_byte.map(|(cb, m)| {
-        let next = text[cb..].graphemes(true).next().map(|g| g.len()).unwrap_or(0);
+        let next = text[cb..]
+            .graphemes(true)
+            .next()
+            .map(|g| g.len())
+            .unwrap_or(0);
         (cb, (cb + next).min(text.len()), m)
     });
     let mut marks: Vec<(usize, usize, u8)> = Vec::new(); // 0 sel, 1 cursor
@@ -662,9 +796,7 @@ fn render_line(
         let piece = text.get(a..b).unwrap_or("").to_string();
         let style = match cursor_mode {
             Some(Mode::Normal) => Style::new().bg(t.accent).fg(t.cursor_fg),
-            Some(Mode::Insert) => {
-                Style::new().underlined().fg(t.fg).underline_color(t.accent)
-            }
+            Some(Mode::Insert) => Style::new().underlined().fg(t.fg).underline_color(t.accent),
             _ if is_sel => Style::new().bg(t.visual_bg).fg(t.fg),
             _ if is_match => Style::new().bg(t.match_bg).fg(t.cursor_fg),
             _ => Style::new().fg(t.fg),
@@ -679,11 +811,16 @@ fn render_line(
 fn draw_hover(f: &mut Frame, area: Rect, app: &mut App) {
     let Some(hover) = &app.hover else { return };
     let t = app.theme;
-    let w = ((area.width as f32 * 0.5) as u16).min(70).max(30);
+    let w = ((area.width as f32 * 0.5) as u16).clamp(30, 70);
     let h = 10.min(area.height.saturating_sub(2));
     let x = area.x + area.width.saturating_sub(w + 2);
     let y = area.y + 1;
-    let rect = Rect { x, y, width: w, height: h };
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
     let block = Block::default()
         .title(" hover ")
         .borders(ratatui::widgets::Borders::ALL)
@@ -700,15 +837,22 @@ fn draw_hover(f: &mut Frame, area: Rect, app: &mut App) {
 // ----------------------------------------------------------------- finder ---
 
 fn draw_finder(f: &mut Frame, area: Rect, app: &mut App) {
-    let Some(finder) = &mut app.finder else { return };
+    let Some(finder) = &mut app.finder else {
+        return;
+    };
     let t = app.theme;
     let (w, h) = (
-        ((area.width as f32 * 0.6) as u16).min(70).max(30),
+        ((area.width as f32 * 0.6) as u16).clamp(30, 70),
         14.min(area.height.saturating_sub(2)),
     );
     let x = area.x + (area.width - w) / 2;
     let y = area.y + area.height / 8;
-    let rect = Rect { x, y, width: w, height: h };
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
 
     let block = Block::default()
         .title(" archivo ")
@@ -718,7 +862,10 @@ fn draw_finder(f: &mut Frame, area: Rect, app: &mut App) {
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
-    let mut lines = vec![Line::styled(format!("▸ {}", finder.query), Style::new().fg(t.accent))];
+    let mut lines = vec![Line::styled(
+        format!("▸ {}", finder.query),
+        Style::new().fg(t.accent),
+    )];
     let rows = inner.height.saturating_sub(2) as usize;
     for (i, p) in finder.results.iter().enumerate().take(rows) {
         let name = p.display().to_string();

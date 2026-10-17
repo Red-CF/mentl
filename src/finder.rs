@@ -2,7 +2,14 @@
 
 use std::path::{Path, PathBuf};
 
-pub(crate) const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", "vendor", ".herdr", ".venv"];
+pub(crate) const SKIP_DIRS: &[&str] = &[
+    ".git",
+    "target",
+    "node_modules",
+    "vendor",
+    ".herdr",
+    ".venv",
+];
 pub(crate) const MAX_FILES: usize = 5000;
 pub(crate) const MAX_DEPTH: usize = 10;
 const TOP: usize = 40;
@@ -16,7 +23,12 @@ pub struct Finder {
 
 impl Finder {
     pub fn new(root: &Path) -> Self {
-        Self { files: walk(root), query: String::new(), cursor: 0, results: Vec::new() }
+        Self {
+            files: walk(root),
+            query: String::new(),
+            cursor: 0,
+            results: Vec::new(),
+        }
     }
 
     pub fn filter(&mut self) {
@@ -29,7 +41,11 @@ impl Finder {
                 .filter_map(|f| score(&self.query, &f.to_string_lossy()).map(|s| (s, f)))
                 .collect();
             scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
-            self.results = scored.into_iter().take(TOP).map(|(_, f)| f.clone()).collect();
+            self.results = scored
+                .into_iter()
+                .take(TOP)
+                .map(|(_, f)| f.clone())
+                .collect();
         }
         self.cursor = self.cursor.min(self.results.len().saturating_sub(1));
     }
@@ -37,7 +53,8 @@ impl Finder {
     pub fn key(&mut self, k: crate::input::InputKey) -> Option<PathBuf> {
         // solo flechas navegan — chars SIEMPRE van a la query
         use crossterm::event::KeyCode as K;
-        let act = match k.code {
+
+        match k.code {
             K::Char(c) => {
                 self.query.push(c);
                 self.filter();
@@ -61,8 +78,7 @@ impl Finder {
             K::Enter => self.results.get(self.cursor).cloned(),
             K::Esc => None,
             _ => None,
-        };
-        act
+        }
     }
 }
 
@@ -87,7 +103,7 @@ fn score(pat: &str, hay: &str) -> Option<i64> {
         let fi = found?;
         score += match last_hit {
             Some(l) if fi == l + 1 => 3, // consecutivo
-            Some(l) if fi > l => -1 * (fi - l - 1) as i64,
+            Some(l) if fi > l => -((fi - l - 1) as i64),
             _ => 0,
         };
         idx = fi + 1;

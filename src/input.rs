@@ -12,7 +12,11 @@ pub struct InputKey {
 
 impl InputKey {
     pub fn simple(code: KeyCode) -> Self {
-        Self { code, ctrl: false, alt: false }
+        Self {
+            code,
+            ctrl: false,
+            alt: false,
+        }
     }
 
     /// None para eventos que no son pulsados por el usuario.
@@ -32,7 +36,11 @@ impl InputKey {
     pub fn parse(token: &str) -> Result<Self, String> {
         // el leader es a menudo un espacio — no trims lo vacíes
         if token == " " {
-            return Ok(Self { code: KeyCode::Char(' '), ctrl: false, alt: false });
+            return Ok(Self {
+                code: KeyCode::Char(' '),
+                ctrl: false,
+                alt: false,
+            });
         }
         let t = token.trim();
         if t.is_empty() {

@@ -6,26 +6,39 @@ pub mod transport;
 pub mod types;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use crate::config::{LspCfg, ServerCfg};
 
 #[derive(Debug, Clone)]
 pub struct Diag {
-    pub line: usize,   // 0-based
-    pub col_u16: u32,  // crudo UTF-16 (para saltar aun sin buffer abierto);
-                       // pos_of_lsp volverá aquí cuando lleguen las squiggles
+    pub line: usize,  // 0-based
+    pub col_u16: u32, // crudo UTF-16 (para saltar aun sin buffer abierto);
+    // pos_of_lsp volverá aquí cuando lleguen las squiggles
     pub severity: u32, // 1 error 2 warn 3 info 4 hint
     pub msg: String,
 }
 
 pub enum LspEvent {
-    Diagnostics { uri: String, diags: Vec<types::Diag> },
-    Response { req_id: u64, body: serde_json::Value },
-    Started { lang: &'static str },
-    StartedFailed { lang: &'static str, err: String },
-    Died { lang: &'static str, err: String },
+    Diagnostics {
+        uri: String,
+        diags: Vec<types::Diag>,
+    },
+    Response {
+        req_id: u64,
+        body: serde_json::Value,
+    },
+    Started {
+        lang: &'static str,
+    },
+    StartedFailed {
+        lang: &'static str,
+        err: String,
+    },
+    Died {
+        lang: &'static str,
+        err: String,
+    },
 }
 
 pub struct ClientHandle {
@@ -37,7 +50,7 @@ pub struct ClientHandle {
 pub struct LspHub {
     pub tx: Sender<LspEvent>,
     pub rx: Receiver<LspEvent>,
-   clients: HashMap<&'static str, ClientHandle>,
+    clients: HashMap<&'static str, ClientHandle>,
     next_req: u64,
     pub enabled: bool,
 }
@@ -45,7 +58,13 @@ pub struct LspHub {
 impl Default for LspHub {
     fn default() -> Self {
         let (tx, rx) = mpsc::channel();
-        Self { tx, rx, clients: HashMap::new(), next_req: 1, enabled: false }
+        Self {
+            tx,
+            rx,
+            clients: HashMap::new(),
+            next_req: 1,
+            enabled: false,
+        }
     }
 }
 
@@ -64,8 +83,14 @@ impl LspHub {
             });
             return;
         }
-        let Some(h) = client::spawn(lang, &s.command, self.tx.clone()) else { return };
-        let h = ClientHandle { tx: h.tx, lang: h.lang, ready: false };
+        let Some(h) = client::spawn(lang, &s.command, self.tx.clone()) else {
+            return;
+        };
+        let h = ClientHandle {
+            tx: h.tx,
+            lang: h.lang,
+            ready: false,
+        };
         self.clients.insert(lang, h);
     }
 
@@ -79,16 +104,14 @@ impl LspHub {
 
     /// Marca ready y devuelve el handle para mandar didOpen pendientes.
     pub fn mark_ready(&mut self, lang: &'static str) -> bool {
-        let changed = self
-            .clients
+        self.clients
             .get_mut(lang)
             .map(|c| {
                 let was = c.ready;
                 c.ready = true;
                 !was
             })
-            .unwrap_or(false);
-        changed
+            .unwrap_or(false)
     }
 
     pub fn remove(&mut self, lang: &'static str) {
@@ -99,17 +122,29 @@ impl LspHub {
         self.clients.iter().map(|(k, v)| (*k, v))
     }
 
-    pub fn request(&mut self, lang: &'static str, method: &str, params: serde_json::Value) -> Option<u64> {
-        let Some(c) = self.clients.get(lang) else { return None };
+    pub fn request(
+        &mut self,
+        lang: &'static str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Option<u64> {
+        let c = self.clients.get(lang)?;
         let req_id = self.next_req;
         self.next_req += 1;
-        let _ = c.tx.send(client::Cmd::Request { req_id, method: method.into(), params });
+        let _ = c.tx.send(client::Cmd::Request {
+            req_id,
+            method: method.into(),
+            params,
+        });
         Some(req_id)
     }
 
     pub fn notify(&self, lang: &'static str, method: &str, params: serde_json::Value) {
         if let Some(c) = self.clients.get(lang) {
-            let _ = c.tx.send(client::Cmd::Notify { method: method.into(), params });
+            let _ = c.tx.send(client::Cmd::Notify {
+                method: method.into(),
+                params,
+            });
         }
     }
 
@@ -126,13 +161,13 @@ impl LspHub {
 
     /// Shutdown best-effort de todos los clientes.
     pub fn shutdown(&self) {
-        for (_, c) in self.clients.iter() {
+        for c in self.clients.values() {
             let _ = c.tx.send(client::Cmd::Shutdown);
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
 
-    pub fn language_of(&self, path: &PathBuf) -> Option<&'static str> {
+    pub fn language_of(&self, path: &std::path::Path) -> Option<&'static str> {
         let ext = path.extension()?.to_str()?; // rs -> rust, java -> java
         match ext {
             "rs" => Some("rust"),

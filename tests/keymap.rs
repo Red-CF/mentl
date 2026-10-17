@@ -1,9 +1,9 @@
 //! Chord timeout: secuencia incompleta se limpia en tick tras el vencimiento.
 
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
 use mentl::app::App;
 use mentl::input::InputKey;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 #[test]
 fn chord_timeout_limpia_pending() {

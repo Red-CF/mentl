@@ -33,6 +33,7 @@ pub fn read_msg<R: BufRead>(r: &mut R) -> std::io::Result<Option<String>> {
     };
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
-    let s = String::from_utf8(buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let s = String::from_utf8(buf)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     Ok(Some(s))
 }

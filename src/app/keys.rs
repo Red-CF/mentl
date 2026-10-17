@@ -4,16 +4,16 @@ use std::time::Instant;
 
 use std::path::PathBuf;
 
-use crate::app::{find_all, App, HoverOrDef, Screen};
-use crate::buffer::Buffer;
-use crate::input::InputKey;
-use crate::keymap::{Mode, Match};
 use crate::action::Action;
 use crate::app::Selection;
 use crate::app::edit::VisualOp;
+use crate::app::{App, HoverOrDef, Screen, find_all};
+use crate::buffer::Buffer;
+use crate::finder::Finder;
+use crate::input::InputKey;
+use crate::keymap::{Match, Mode};
 use crate::panes::{Dir, Focus};
 use unicode_segmentation::UnicodeSegmentation;
-use crate::finder::Finder;
 
 impl App {
     fn do_action(&mut self, a: Action) {
@@ -167,7 +167,8 @@ impl App {
                 match self.sidebar.as_ref() {
                     // cerrada -> abrir enfocada
                     None => {
-                        self.sidebar = Some(crate::explorer::Sidebar::new(self.project_root.clone()));
+                        self.sidebar =
+                            Some(crate::explorer::Sidebar::new(self.project_root.clone()));
                         self.sidebar_focus = true;
                     }
                     // abierta sin foco -> foco (no la cierro: la cerraste sin querer una vez y duele)
@@ -213,8 +214,10 @@ impl App {
             if *p == self.panes.active {
                 continue;
             }
-            let inside =
-                target.0 >= r.x && target.0 < r.x + r.width && target.1 >= r.y && target.1 < r.y + r.height;
+            let inside = target.0 >= r.x
+                && target.0 < r.x + r.width
+                && target.1 >= r.y
+                && target.1 < r.y + r.height;
             if inside {
                 self.panes.active = *p;
                 return;
@@ -345,11 +348,10 @@ impl App {
             Ok(()) => self.screen = Screen::Editor,
             Err(e) => {
                 // se queda en welcome para reintentar; el error se ve en el hub
-                self.status_msg(format!("{e}"));
+                self.status_msg(e.to_string());
             }
         }
     }
-
 
     fn finder_key(&mut self, k: InputKey) {
         let pick = self.finder.as_mut().map(|f| f.key(k)).unwrap_or(None);
@@ -367,7 +369,9 @@ impl App {
         use crossterm::event::KeyCode as K;
         match k.code {
             K::Enter => {
-                self.search = if self.search_input.is_empty() { None } else {
+                self.search = if self.search_input.is_empty() {
+                    None
+                } else {
                     Some(self.search_input.clone())
                 };
                 self.search_prompt = false;
@@ -427,10 +431,10 @@ impl App {
         }
         // hover/def timeouts (stale)
         for slot in [&mut self.hover_wait, &mut self.def_wait] {
-            if let Some((_, _, until)) = slot {
-                if until.elapsed() > std::time::Duration::from_secs(3) {
-                    *slot = None;
-                }
+            if let Some((_, _, until)) = slot
+                && until.elapsed() > std::time::Duration::from_secs(3)
+            {
+                *slot = None;
             }
         }
         if self.screen == Screen::Welcome {
@@ -535,7 +539,8 @@ impl App {
     }
 
     fn insert_pair(&mut self, open: char, close: char) {
-        self.buffer().insert_text(&format!("{open}{close}"), "insert");
+        self.buffer()
+            .insert_text(&format!("{open}{close}"), "insert");
         self.buffer().mv(0, -1);
     }
 
@@ -553,12 +558,19 @@ impl App {
     fn enter_autoindent(&mut self) {
         let (l, _) = self.buffer().cursor;
         let text = self.buffer().line_text(l);
-        let lead: String = text.chars().take_while(|&c| c == ' ' || c == '\t').collect();
+        let lead: String = text
+            .chars()
+            .take_while(|&c| c == ' ' || c == '\t')
+            .collect();
         let unit = self.buffer().indent_unit();
         let opens = text.trim_end().ends_with('{')
             || text.trim_end().ends_with('(')
             || text.trim_end().ends_with('[');
-        let extra = match opens { true => unit, false => String::new() };
-        self.buffer().insert_text(&format!("\n{lead}{extra}"), "insert");
+        let extra = match opens {
+            true => unit,
+            false => String::new(),
+        };
+        self.buffer()
+            .insert_text(&format!("\n{lead}{extra}"), "insert");
     }
 }

@@ -10,14 +10,21 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::types::{self, InMsg, OutMsg};
 use super::LspEvent;
+use super::types::{self, InMsg, OutMsg};
 
 const TICK: Duration = Duration::from_millis(50);
 
 pub enum Cmd {
-    Request { req_id: u64, method: String, params: serde_json::Value },
-    Notify { method: String, params: serde_json::Value },
+    Request {
+        req_id: u64,
+        method: String,
+        params: serde_json::Value,
+    },
+    Notify {
+        method: String,
+        params: serde_json::Value,
+    },
     Shutdown,
 }
 
@@ -27,7 +34,11 @@ pub struct ClientHandle {
     pub ready: bool,
 }
 
-pub fn spawn(lang: &'static str, command: &[String], tx_events: Sender<LspEvent>) -> Option<ClientHandle> {
+pub fn spawn(
+    lang: &'static str,
+    command: &[String],
+    tx_events: Sender<LspEvent>,
+) -> Option<ClientHandle> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
     let mut child = match Command::new(&command[0])
         .args(&command[1..])
@@ -78,10 +89,21 @@ pub fn spawn(lang: &'static str, command: &[String], tx_events: Sender<LspEvent>
     std::thread::Builder::new()
         .name(format!("lsp-{lang_t}"))
         .spawn(move || {
-            client_loop(child, BufWriter::new(stdin), msg_rx, cmd_rx, lang_t, tx_events)
+            client_loop(
+                child,
+                BufWriter::new(stdin),
+                msg_rx,
+                cmd_rx,
+                lang_t,
+                tx_events,
+            )
         })
         .ok()?;
-    Some(ClientHandle { tx: cmd_tx, lang, ready: false })
+    Some(ClientHandle {
+        tx: cmd_tx,
+        lang,
+        ready: false,
+    })
 }
 
 fn client_loop(
@@ -108,11 +130,14 @@ fn client_loop(
             "general": {"positionEncodings": ["utf-16"]},
         }
     });
-    let _ = transport_write(&mut out, &OutMsg::Request {
-        id: next_id,
-        method: "initialize".into(),
-        params,
-    });
+    let _ = transport_write(
+        &mut out,
+        &OutMsg::Request {
+            id: next_id,
+            method: "initialize".into(),
+            params,
+        },
+    );
     next_id += 1;
     // handshake: solo esperamos la respuesta initialize
     loop {
@@ -133,7 +158,10 @@ fn client_loop(
     }
     let _ = transport_write(
         &mut out,
-        &OutMsg::Notification { method: "initialized".into(), params: json!({}) },
+        &OutMsg::Notification {
+            method: "initialized".into(),
+            params: json!({}),
+        },
     );
     let _ = tx_events.send(LspEvent::Started { lang });
 
@@ -142,11 +170,22 @@ fn client_loop(
         let mut shutdown = false;
         loop {
             match cmd_rx.try_recv() {
-                Ok(Cmd::Request { req_id, method, params }) => {
+                Ok(Cmd::Request {
+                    req_id,
+                    method,
+                    params,
+                }) => {
                     let wire = next_id;
                     next_id += 1;
                     pending.insert(wire, req_id);
-                    let _ = transport_write(&mut out, &OutMsg::Request { id: wire, method, params });
+                    let _ = transport_write(
+                        &mut out,
+                        &OutMsg::Request {
+                            id: wire,
+                            method,
+                            params,
+                        },
+                    );
                 }
                 Ok(Cmd::Notify { method, params }) => {
                     let _ = transport_write(&mut out, &OutMsg::Notification { method, params });
@@ -157,7 +196,10 @@ fn client_loop(
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    let _ = tx_events.send(LspEvent::Died { lang, err: "hub cayó".into() });
+                    let _ = tx_events.send(LspEvent::Died {
+                        lang,
+                        err: "hub cayó".into(),
+                    });
                     return;
                 }
             }
@@ -172,17 +214,20 @@ fn client_loop(
             Ok(Some(Ok(msg))) => {
                 match types::parse_in(&msg) {
                     InMsg::Notification { method, params } => {
-                        if method == "textDocument/publishDiagnostics" {
-                            if let Some((uri, diags)) = types::parse_diagnostics(&params) {
-                                let _ = tx_events.send(LspEvent::Diagnostics { uri, diags });
-                            }
+                        if method == "textDocument/publishDiagnostics"
+                            && let Some((uri, diags)) = types::parse_diagnostics(&params)
+                        {
+                            let _ = tx_events.send(LspEvent::Diagnostics { uri, diags });
                         }
                         // $/progress, window/logMessage etc: silencio
                     }
                     InMsg::Request { id, .. } => answer_request(&mut out, id),
                     InMsg::Response { id, result, .. } => {
                         if let Some(req_id) = pending.remove(&id) {
-                            let _ = tx_events.send(LspEvent::Response { req_id, body: result });
+                            let _ = tx_events.send(LspEvent::Response {
+                                req_id,
+                                body: result,
+                            });
                         }
                     }
                     InMsg::Unknown => {}
@@ -196,17 +241,31 @@ fn client_loop(
                 return;
             }
             Ok(Some(Err(_))) => {
-                let _ = tx_events.send(LspEvent::Died { lang, err: "stdio roto".into() });
+                let _ = tx_events.send(LspEvent::Died {
+                    lang,
+                    err: "stdio roto".into(),
+                });
                 return;
             }
             Err(TryRecvError::Empty) => {
                 // nada inbound: espera comandos o tick
                 match cmd_rx.recv_timeout(TICK) {
-                    Ok(Cmd::Request { req_id, method, params }) => {
+                    Ok(Cmd::Request {
+                        req_id,
+                        method,
+                        params,
+                    }) => {
                         let wire = next_id;
                         next_id += 1;
                         pending.insert(wire, req_id);
-                        let _ = transport_write(&mut out, &OutMsg::Request { id: wire, method, params });
+                        let _ = transport_write(
+                            &mut out,
+                            &OutMsg::Request {
+                                id: wire,
+                                method,
+                                params,
+                            },
+                        );
                     }
                     Ok(Cmd::Notify { method, params }) => {
                         let _ = transport_write(&mut out, &OutMsg::Notification { method, params });
@@ -219,7 +278,10 @@ fn client_loop(
                 }
             }
             Err(TryRecvError::Disconnected) => {
-                let _ = tx_events.send(LspEvent::Died { lang, err: "hub cayó".into() });
+                let _ = tx_events.send(LspEvent::Died {
+                    lang,
+                    err: "hub cayó".into(),
+                });
                 return;
             }
         }
@@ -228,16 +290,22 @@ fn client_loop(
 
 /// Secuencia shutdown+exit+wait — UNA sola fuente (spec LSP).
 fn shutdown_exit(child: &mut Child, out: &mut BufWriter<ChildStdin>, next_id: &mut u64) {
-    let _ = transport_write(out, &OutMsg::Request {
-        id: *next_id,
-        method: "shutdown".into(),
-        params: json!(null),
-    });
+    let _ = transport_write(
+        out,
+        &OutMsg::Request {
+            id: *next_id,
+            method: "shutdown".into(),
+            params: json!(null),
+        },
+    );
     *next_id += 1;
-    let _ = transport_write(out, &OutMsg::Notification {
-        method: "exit".into(),
-        params: json!(null),
-    });
+    let _ = transport_write(
+        out,
+        &OutMsg::Notification {
+            method: "exit".into(),
+            params: json!(null),
+        },
+    );
     let _ = child.wait();
 }
 

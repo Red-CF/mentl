@@ -3,8 +3,8 @@
 
 use std::time::{Duration, Instant};
 
+use ratatui::{Terminal, backend::TestBackend};
 use ropey::Rope;
-use ratatui::{backend::TestBackend, Terminal};
 
 use mentl::app::App;
 use mentl::buffer::Buffer;
@@ -103,14 +103,11 @@ fn main() {
     // ------------------------------------------------------------ LSP parse --
     let mut diags = serde_json::json!([]);
     for i in 0..300 {
-        diags
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({
-                "range": {"start": {"line": i, "character": 3}},
-                "severity": 2,
-                "message": format!("warn {i} con texto medio largo"),
-            }));
+        diags.as_array_mut().unwrap().push(serde_json::json!({
+            "range": {"start": {"line": i, "character": 3}},
+            "severity": 2,
+            "message": format!("warn {i} con texto medio largo"),
+        }));
     }
     let params = serde_json::json!({"uri": "file:///mock.rs", "diagnostics": diags});
     bench("parse_diagnostics 300", iters, || {
