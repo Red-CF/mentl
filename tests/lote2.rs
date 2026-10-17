@@ -112,8 +112,9 @@ fn git_branch_leido_del_head_sin_procesos() {
 #[test]
 fn apply_text_edits_con_utf16_y_emoji() {
     use mentl::buffer::{Buffer, TextLspEdit};
-    std::fs::write("/tmp/l2-apply.txt", "uno\n😀 x\nfin\n").unwrap();
-    let mut b = Buffer::open(Path::new("/tmp/l2-apply.txt")).unwrap();
+    let f = std::env::temp_dir().join(format!("l2-apply-{}.txt", std::process::id()));
+    std::fs::write(&f, "uno\n😀 x\nfin\n").unwrap();
+    let mut b = Buffer::open(&f).unwrap();
     // edit que reemplaza la línea del emoji entera (UTF-16: 😀=2)
     let edits = vec![TextLspEdit {
         start_line: 1,
