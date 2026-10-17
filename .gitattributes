@@ -1,0 +1,2 @@
+# LF canónico en checkout: fixtures/toml sin sorpresas CRLF en Windows
+* text=auto eol=lf
